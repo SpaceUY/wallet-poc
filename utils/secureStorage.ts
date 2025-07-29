@@ -165,6 +165,13 @@ export class SecureStorage {
         const address = this.deriveAddress(result.publicKey);
         console.log('Derived address from Secure Enclave public key:', address);
         
+        // Store the address for later retrieval
+        await this.setItem(
+          `address_${keyId}`,
+          address,
+          SECURE_STORAGE_OPTIONS.MEDIUM_SECURITY
+        );
+        
         return { address };
       }
 

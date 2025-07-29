@@ -3,6 +3,7 @@ import { Alert, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, Scroll
 
 import { ThemedText as Text } from '@/components/ThemedText';
 import { ThemedView as View } from '@/components/ThemedView';
+import { useThemeColor } from '@/hooks/useThemeColor';
 import { walletService } from '@/services/WalletService';
 import { secureStorage } from '@/utils/secureStorage';
 import Clipboard from '@react-native-clipboard/clipboard';
@@ -10,6 +11,23 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function TestWalletScreen() {
   const insets = useSafeAreaInsets();
+  
+  // Theme colors
+  const cardBackground = useThemeColor({}, 'cardBackground');
+  const borderColor = useThemeColor({}, 'border');
+  const buttonPrimary = useThemeColor({}, 'buttonPrimary');
+  const buttonSecondary = useThemeColor({}, 'buttonSecondary');
+  const buttonSuccess = useThemeColor({}, 'buttonSuccess');
+  const buttonWarning = useThemeColor({}, 'buttonWarning');
+  const buttonDanger = useThemeColor({}, 'buttonDanger');
+  const buttonDisabled = useThemeColor({}, 'buttonDisabled');
+  const modalOverlay = useThemeColor({}, 'modalOverlay');
+  const modalBackground = useThemeColor({}, 'modalBackground');
+  const inputBackground = useThemeColor({}, 'inputBackground');
+  const inputBorder = useThemeColor({}, 'inputBorder');
+  const placeholderColor = useThemeColor({}, 'placeholder');
+  const linkColor = useThemeColor({}, 'link');
+  
   const [status, setStatus] = useState('Ready');
   const [walletInfo, setWalletInfo] = useState<{
     address?: string;
@@ -30,23 +48,24 @@ export default function TestWalletScreen() {
         console.log('Component: Starting wallet check...');
         setStatus('Checking for existing wallet...');
         
-        const existingWallet = await walletService.checkExistingWallet();
-        console.log('Component: checkExistingWallet result:', existingWallet);
+        // Use the actual signing address for hardware wallets
+        const actualAddress = await walletService.getActualSigningAddress();
+        console.log('Component: getActualSigningAddress result:', actualAddress);
         
-        if (existingWallet && existingWallet.address) {
-          console.log('Component: Found wallet, setting address:', existingWallet.address);
-          setWalletInfo({ address: existingWallet.address });
+        if (actualAddress) {
+          console.log('Component: Found wallet, setting address:', actualAddress);
+          setWalletInfo({ address: actualAddress });
           setStatus('Found existing wallet, getting balance...');
           
           // Get initial balance
-          console.log('Component: Getting balance for address:', existingWallet.address);
-          const balance = await walletService.getBalance(existingWallet.address);
+          console.log('Component: Getting balance for address:', actualAddress);
+          const balance = await walletService.getBalance(actualAddress);
           console.log('Component: Got balance:', balance);
           
           setWalletInfo(prev => ({ ...prev, balance }));
           setStatus('Wallet restored successfully!');
         } else {
-          console.log('Component: No wallet found or invalid wallet data:', existingWallet);
+          console.log('Component: No wallet found');
           setStatus('No existing wallet found');
         }
       } catch (error) {
@@ -283,9 +302,9 @@ export default function TestWalletScreen() {
       }
     ]}>
       {/* Status Section */}
-      <View style={styles.statusSection}>
+      <View style={[styles.statusSection, { borderBottomColor: borderColor }]}>
         <Text style={styles.title}>Wallet Status</Text>
-        <View style={styles.statusContainer}>
+        <View style={[styles.statusContainer, { backgroundColor: cardBackground }]}>
           <Text style={styles.label}>Status:</Text>
           <Text style={styles.value}>{status}</Text>
           
@@ -318,40 +337,51 @@ export default function TestWalletScreen() {
             style={[
               styles.modalOverlay,
               {
+                backgroundColor: modalOverlay,
                 paddingTop: insets.top,
                 paddingBottom: insets.bottom,
               }
             ]}
           >
-            <View style={styles.modalContent}>
+            <View style={[styles.modalContent, { backgroundColor: modalBackground }]}>
               <ScrollView bounces={false}>
                 <Text style={styles.modalTitle}>Send Transaction</Text>
                 
                 <View style={styles.inputContainer}>
                   <Text style={styles.label}>Recipient Address:</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, { 
+                      backgroundColor: inputBackground, 
+                      borderColor: inputBorder,
+                      color: useThemeColor({}, 'text')
+                    }]}
                     value={txInfo.to}
                     onChangeText={(text) => setTxInfo(prev => ({ ...prev, to: text }))}
                     placeholder="0x..."
+                    placeholderTextColor={placeholderColor}
                     autoCapitalize="none"
                     autoCorrect={false}
                   />
                   
                   <Text style={styles.label}>Amount (ETH):</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, { 
+                      backgroundColor: inputBackground, 
+                      borderColor: inputBorder,
+                      color: useThemeColor({}, 'text')
+                    }]}
                     value={txInfo.amount}
                     onChangeText={(text) => setTxInfo(prev => ({ ...prev, amount: text }))}
                     keyboardType="decimal-pad"
                     placeholder="0.001"
+                    placeholderTextColor={placeholderColor}
                   />
                 </View>
               </ScrollView>
 
               <View style={styles.modalButtons}>
                 <Text 
-                  style={[styles.button, styles.cancelButton]} 
+                  style={[styles.button, styles.cancelButton, { backgroundColor: buttonSecondary }]} 
                   onPress={() => {
                     Keyboard.dismiss();
                     setIsSendModalVisible(false);
@@ -360,7 +390,7 @@ export default function TestWalletScreen() {
                   Cancel
                 </Text>
                 <Text 
-                  style={[styles.button, styles.sendButton]} 
+                  style={[styles.button, styles.sendButton, { backgroundColor: buttonPrimary }]} 
                   onPress={() => {
                     Keyboard.dismiss();
                     testSendTransaction();
@@ -384,11 +414,12 @@ export default function TestWalletScreen() {
         <View style={[
           styles.modalOverlay,
           {
+            backgroundColor: modalOverlay,
             paddingTop: insets.top,
             paddingBottom: insets.bottom,
           }
         ]}>
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, { backgroundColor: modalBackground }]}>
             <Text style={styles.modalTitle}>Transaction Sent!</Text>
             
             <View style={styles.successContainer}>
@@ -398,7 +429,7 @@ export default function TestWalletScreen() {
               </Text>
 
               <Text 
-                style={[styles.button, styles.linkButton]}
+                style={[styles.button, styles.linkButton, { backgroundColor: linkColor }]}
                 onPress={() => {
                   if (lastTxHash) {
                     Linking.openURL(`https://sepolia.etherscan.io/tx/${lastTxHash}`);
@@ -409,7 +440,7 @@ export default function TestWalletScreen() {
               </Text>
 
               {isConfirming && (
-                <Text style={styles.confirmingText}>
+                <Text style={[styles.confirmingText, { color: placeholderColor }]}>
                   Waiting for confirmation...
                 </Text>
               )}
@@ -417,7 +448,7 @@ export default function TestWalletScreen() {
 
             <View style={styles.modalButtons}>
               <Text 
-                style={[styles.button, styles.okButton]} 
+                style={[styles.button, styles.okButton, { backgroundColor: buttonSuccess }]} 
                 onPress={() => setIsSuccessModalVisible(false)}
               >
                 Close
@@ -434,6 +465,7 @@ export default function TestWalletScreen() {
             <Text 
               style={[
                 styles.button, 
+                { backgroundColor: walletInfo.address ? buttonDisabled : buttonPrimary },
                 walletInfo.address ? styles.buttonDisabled : {}
               ]} 
               onPress={createHardwareWallet}
@@ -445,6 +477,7 @@ export default function TestWalletScreen() {
               style={[
                 styles.button, 
                 styles.softwareButton,
+                { backgroundColor: walletInfo.address ? buttonDisabled : buttonSecondary },
                 walletInfo.address ? styles.buttonDisabled : {}
               ]} 
               onPress={createSoftwareWallet}
@@ -454,30 +487,30 @@ export default function TestWalletScreen() {
             
             {walletInfo.address && (
               <>
-                <Text style={styles.button} onPress={testGetBalance}>
+                <Text style={[styles.button, { backgroundColor: buttonPrimary }]} onPress={testGetBalance}>
                   Update Balance
                 </Text>
 
                 <Text 
-                  style={styles.button} 
+                  style={[styles.button, { backgroundColor: buttonPrimary }]} 
                   onPress={() => setIsSendModalVisible(true)}
                 >
                   Send Transaction
                 </Text>
 
-                <Text style={styles.button} onPress={copyAddressToClipboard}>
+                <Text style={[styles.button, { backgroundColor: buttonPrimary }]} onPress={copyAddressToClipboard}>
                   Copy Wallet Address
                 </Text>
 
                 <Text 
-                  style={[styles.button, styles.warningButton]} 
+                  style={[styles.button, styles.warningButton, { backgroundColor: buttonWarning }]} 
                   onPress={viewPrivateKey}
                 >
                   View Private Key
                 </Text>
 
                 <Text 
-                  style={[styles.button, styles.deleteButton]} 
+                  style={[styles.button, styles.deleteButton, { backgroundColor: buttonDanger }]} 
                   onPress={testDeleteWallet}
                 >
                   Delete Wallet
@@ -498,7 +531,6 @@ const styles = StyleSheet.create({
   statusSection: {
     padding: 20,
     borderBottomWidth: 1,
-    borderBottomColor: '#ccc',
   },
   title: {
     fontSize: 20,
@@ -506,7 +538,6 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   statusContainer: {
-    backgroundColor: '#f5f5f5',
     padding: 15,
     borderRadius: 5,
   },
@@ -523,17 +554,15 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   button: {
-    backgroundColor: '#2196F3',
     padding: 15,
     borderRadius: 5,
     color: 'white',
     textAlign: 'center',
   },
   deleteButton: {
-    backgroundColor: '#ff4444',
+    // backgroundColor will be set dynamically
   },
   buttonDisabled: {
-    backgroundColor: '#cccccc',
     opacity: 0.7,
   },
   label: {
@@ -544,21 +573,19 @@ const styles = StyleSheet.create({
     marginBottom: 15,
   },
   warningButton: {
-    backgroundColor: '#ff9800',
+    // backgroundColor will be set dynamically
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   modalContent: {
-    backgroundColor: 'white',
     borderRadius: 10,
     padding: 20,
     width: '90%',
     maxWidth: 500,
-    maxHeight: '80%', // Add this to prevent modal from taking full height
+    maxHeight: '80%',
   },
   modalTitle: {
     fontSize: 18,
@@ -571,7 +598,6 @@ const styles = StyleSheet.create({
   },
   input: {
     borderWidth: 1,
-    borderColor: '#ccc',
     borderRadius: 5,
     padding: 10,
     marginBottom: 10,
@@ -580,11 +606,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 10,
-    marginTop: 10, // Add some space above buttons
+    marginTop: 10,
   },
   cancelButton: {
     flex: 1,
-    backgroundColor: '#999',
   },
   sendButton: {
     flex: 1,
@@ -595,18 +620,15 @@ const styles = StyleSheet.create({
   },
   confirmingText: {
     marginTop: 10,
-    color: '#666',
     fontStyle: 'italic',
   },
   linkButton: {
-    backgroundColor: '#2196F3',
     marginTop: 15,
   },
   okButton: {
     flex: 1,
-    backgroundColor: '#4CAF50',
   },
   softwareButton: {
-    backgroundColor: '#666',
+    // backgroundColor will be set dynamically
   },
 }); 

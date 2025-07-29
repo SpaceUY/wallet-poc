@@ -15,4 +15,5 @@ Pod::Spec.new do |s|
   s.source_files   = '*.{h,m,c}'
   s.requires_arc   = true
   s.dependency 'React-Core'
+  s.dependency 'secp256k1'
 end

@@ -13,6 +13,12 @@ interface SecureWalletInterface {
     publicKey: string;
     address: string;
   }>;
+  signTransactionHash(transactionHash: string): Promise<{
+    r: string;
+    s: string;
+    v: number;
+    publicKey: string;
+  }>;
   signTransaction(txData: {
     to: string;
     value: string;
@@ -20,7 +26,13 @@ interface SecureWalletInterface {
     gasLimit: string;
     gasPrice: string;
     data?: string;
-  }): Promise<string>;
+  }): Promise<{
+    r: string;
+    s: string;
+    v: number;
+    publicKey: string;
+  }>;
+  deleteWallet(): Promise<boolean>;
 }
 
 const { SecureWallet } = NativeModules;
