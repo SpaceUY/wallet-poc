@@ -2,6 +2,10 @@ import { NativeModules } from 'react-native';
 
 interface SecureWalletInterface {
   isSecureEnclaveAvailable(): Promise<boolean>;
+  checkForExistingWallet(): Promise<{
+    publicKey: string;
+    address: string;
+  } | null>;
   generateSecureWallet(config: {
     requireBiometric?: boolean;
     label?: string;

@@ -3,6 +3,10 @@
 
 @interface SecureWallet : NSObject <RCTBridgeModule>
 
+// Check for existing wallet
+- (void)checkForExistingWallet:(RCTPromiseResolveBlock)resolve
+                      rejecter:(RCTPromiseRejectBlock)reject;
+
 // Main wallet generation method
 - (void)generateSecureWallet:(NSDictionary *)config
                    resolver:(RCTPromiseResolveBlock)resolve

@@ -24,28 +24,44 @@ export default function TestWalletScreen() {
   const [lastTxHash, setLastTxHash] = useState<string | null>(null);
   const [isConfirming, setIsConfirming] = useState(false);
 
-  // Check for existing wallet on mount
   useEffect(() => {
-    const checkExistingWallet = async () => {
+    const checkWallet = async () => {
       try {
-        const existing = await secureStorage.getExistingWallet('primary');
-        if (existing) {
-          console.log('Found wallet with address:', existing.address);
-          setWalletInfo({ address: existing.address });
-          setStatus('Restored existing wallet');
+        console.log('Component: Starting wallet check...');
+        setStatus('Checking for existing wallet...');
+        
+        const existingWallet = await walletService.checkExistingWallet();
+        console.log('Component: checkExistingWallet result:', existingWallet);
+        
+        if (existingWallet && existingWallet.address) {
+          console.log('Component: Found wallet, setting address:', existingWallet.address);
+          setWalletInfo({ address: existingWallet.address });
+          setStatus('Found existing wallet, getting balance...');
           
           // Get initial balance
-          const balance = await walletService.getBalance(existing.address);
+          console.log('Component: Getting balance for address:', existingWallet.address);
+          const balance = await walletService.getBalance(existingWallet.address);
+          console.log('Component: Got balance:', balance);
+          
           setWalletInfo(prev => ({ ...prev, balance }));
+          setStatus('Wallet restored successfully!');
         } else {
-          console.log('No existing wallet found in secure storage');
+          console.log('Component: No wallet found or invalid wallet data:', existingWallet);
+          setStatus('No existing wallet found');
         }
       } catch (error) {
-        console.error('Error checking existing wallet:', error);
+        console.error('Component: Error in checkWallet:', error);
+        if (error instanceof Error) {
+          console.error('Component: Error details:', error.message);
+          console.error('Component: Error stack:', error.stack);
+          setStatus(`Error checking wallet: ${error.message}`);
+        } else {
+          setStatus('Error checking for existing wallet');
+        }
       }
     };
-
-    checkExistingWallet();
+    
+    checkWallet();
   }, []);
 
   const testCreateWallet = async (useSoftware?: boolean) => {

@@ -12,7 +12,7 @@ Pod::Spec.new do |s|
   s.author         = { 'Your Name' => 'your.email@example.com' }
   s.platform       = :ios, '15.1'
   s.source         = { :git => 'https://github.com/yourusername/wallet-poc.git', :tag => s.version.to_s }
-  s.source_files   = '*.{h,m}'
+  s.source_files   = '*.{h,m,c}'
   s.requires_arc   = true
   s.dependency 'React-Core'
 end

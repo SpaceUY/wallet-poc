@@ -22,6 +22,8 @@ expo-env.d.ts
 ios/*
 !ios/SecureWallet.h
 !ios/SecureWallet.m
+!ios/keccak256.h
+!ios/keccak256.c
 !ios/Podfile
 !ios/SecureWallet.podspec
 ios/Pods/

@@ -31,7 +31,7 @@ export const SECURE_STORAGE_OPTIONS: {
   }
 };
 
-class SecureStorage {
+export class SecureStorage {
   private static instance: SecureStorage;
   private isDeviceSecure: boolean = false;
   
@@ -87,13 +87,17 @@ class SecureStorage {
       // Check Secure Enclave
       const hasSecureEnclave = await this.useSecureEnclave();
       if (!hasSecureEnclave) {
-        risks.push('Secure Enclave not available');
+        if (__DEV__) {
+          warnings.push('Secure Enclave not available');
+        } else {
+          risks.push('Secure Enclave not available');
+        }
       }
 
       // In development, we only care about critical security features
       this.isDeviceSecure = __DEV__ 
-        ? risks.length === 0  // In dev, ignore warnings
-        : risks.length === 0 && warnings.length === 0; // In prod, check both
+        ? risks.length === 0  // In dev, ignore warnings and allow no Secure Enclave
+        : risks.length === 0 && warnings.length === 0; // In prod, require everything
       
       return {
         isSecure: this.isDeviceSecure,
@@ -131,33 +135,37 @@ class SecureStorage {
     }
   }
 
+  private deriveAddress(publicKey: string): string {
+    // Remove '04' prefix if present (uncompressed public key format)
+    const keyWithoutPrefix = publicKey.startsWith('04') ? publicKey.slice(2) : publicKey;
+    
+    // Use ethers.js to compute Keccak-256 hash
+    const hash = ethers.keccak256('0x' + keyWithoutPrefix);
+    
+    // Take last 20 bytes
+    const address = '0x' + hash.slice(-40);
+    
+    return ethers.getAddress(address); // Checksum address
+  }
+
   // Update generateKeyPair to try native module first
   async generateKeyPair(keyId: string, useSoftware = false): Promise<{ address: string }> {
     await this.ensureDeviceSecurity();
 
     try {
       // Try to use Secure Enclave unless software is explicitly requested
-      if (!useSoftware) {
-        console.log('Checking SecureWallet native module:', SecureWallet ? 'Found' : 'Not found');
-        const canUseSecureEnclave = await this.useSecureEnclave();
-        console.log('Can use Secure Enclave:', canUseSecureEnclave);
+      if (!useSoftware && await this.useSecureEnclave()) {
+        console.log('Using Secure Enclave for key generation');
+        const result = await SecureWallet.generateSecureWallet({
+          requireBiometric: true,
+          label: `wallet_${keyId}`
+        });
         
-        if (canUseSecureEnclave) {
-          console.log('Attempting to generate wallet using Secure Enclave...');
-          try {
-            const result = await SecureWallet.generateSecureWallet({
-              requireBiometric: true,
-              label: `wallet_${keyId}`
-            });
-            console.log('Secure Enclave wallet generation result:', result);
-            return result;
-          } catch (error) {
-            console.error('Error in Secure Enclave wallet generation:', error);
-            throw error;
-          }
-        } else {
-          console.log('Secure Enclave not available, falling back to software implementation');
-        }
+        // Derive address from public key
+        const address = this.deriveAddress(result.publicKey);
+        console.log('Derived address from Secure Enclave public key:', address);
+        
+        return { address };
       }
 
       // Fall back to software implementation
@@ -303,7 +311,7 @@ class SecureStorage {
   private async decryptData(encryptedData: string): Promise<string> {
     // This is a placeholder - in production, we'd use the proper decryption key
     // from secure enclave/TEE
-    const [_, data] = encryptedData.split(':');
+    const [, data] = encryptedData.split(':');
     return data;
   }
 

@@ -1,6 +1,7 @@
-import { ENV } from '@/config/env';
-import { secureStorage } from '@/utils/secureStorage';
 import { ethers } from 'ethers';
+import { ENV } from '../config/env';
+import SecureWallet from '../utils/nativeSecureWallet';
+import { secureStorage } from '../utils/secureStorage';
 
 export class WalletService {
   private static instance: WalletService;
@@ -57,7 +58,12 @@ export class WalletService {
 
   async getBalance(address: string): Promise<string> {
     try {
+      console.log('WalletService: Getting balance for address:', address);
+      if (!address) {
+        throw new Error('Address is null or undefined');
+      }
       const balance = await this.provider.getBalance(address);
+      console.log('WalletService: Raw balance result:', balance);
       return ethers.formatEther(balance);
     } catch (error) {
       console.error('Error getting balance:', error);
@@ -114,6 +120,66 @@ export class WalletService {
       console.error('Error deleting wallet:', error);
       throw new Error('Failed to delete wallet');
     }
+  }
+
+  async checkExistingWallet(): Promise<{ address: string } | null> {
+    try {
+      // First verify device security
+      const isSecure = await this.isSecureEnvironmentAvailable();
+      
+      // First check hardware wallet if device is secure
+      if (isSecure) {
+        try {
+          console.log('Device is secure, checking for hardware wallet...');
+          const wallet = await SecureWallet.checkForExistingWallet();
+          if (wallet) {
+            console.log('Found existing hardware wallet with public key:', wallet.publicKey);
+            
+            // Derive address from public key if it's a placeholder
+            if (wallet.address === '0x0000000000000000000000000000000000000000') {
+              const derivedAddress = this.deriveAddressFromPublicKey(wallet.publicKey);
+              console.log('Derived address from public key:', derivedAddress);
+              return { address: derivedAddress };
+            }
+            
+            return { address: wallet.address };
+          }
+        } catch (e) {
+          console.log('No hardware wallet found, checking software wallet');
+        }
+      } else {
+        console.log('Device security check failed, checking software wallet only');
+      }
+
+      // Then check software wallet
+      const existingWallet = await secureStorage.getExistingWallet('primary');
+      if (existingWallet) {
+        console.log('Found existing software wallet:', existingWallet.address);
+        return existingWallet;
+      }
+
+      console.log('No existing wallet found');
+      return null;
+    } catch (error) {
+      console.error('Error checking for existing wallet:', error);
+      if (error instanceof Error) {
+        console.error('Error details:', error.message);
+      }
+      return null;
+    }
+  }
+
+  private deriveAddressFromPublicKey(publicKey: string): string {
+    // Remove '04' prefix if present (uncompressed public key format)
+    const keyWithoutPrefix = publicKey.startsWith('04') ? publicKey.slice(2) : publicKey;
+    
+    // Use ethers.js to compute Keccak-256 hash
+    const hash = ethers.keccak256('0x' + keyWithoutPrefix);
+    
+    // Take last 20 bytes
+    const address = '0x' + hash.slice(-40);
+    
+    return ethers.getAddress(address); // Checksum address
   }
 }
 
