@@ -46,48 +46,61 @@ class SecureStorage {
 
   async verifyDeviceSecurity(): Promise<{ isSecure: boolean; risks: string[] }> {
     const risks: string[] = [];
+    const warnings: string[] = [];
 
     try {
       // Check if device is rooted/jailbroken
-      if (await Device.isRootedExperimentalAsync()) {
+      const isRooted = await Device.isRootedExperimentalAsync();
+      if (isRooted) {
         risks.push('Device is rooted/jailbroken');
       }
 
-      // Check if running in development
+      // Development mode is now just a warning
       if (__DEV__) {
-        risks.push('App running in development mode');
+        warnings.push('App running in development mode');
       }
 
-      // Check if device has latest security patches
+      // Check device type
       const deviceInfo = await Device.getDeviceTypeAsync();
       if (deviceInfo !== Device.DeviceType.PHONE) {
         risks.push('Not running on a secure phone device');
       }
 
-      // Check if biometric is available and enrolled
+      // Check biometric availability
       const canUseBiometric = await SecureStore.canUseBiometricAuthentication();
       if (!canUseBiometric) {
         risks.push('Biometric authentication not available');
       }
 
-      // Check if secure hardware is available
+      // Check secure storage
       const isSecureStoreAvailable = await SecureStore.isAvailableAsync();
       if (!isSecureStoreAvailable) {
         risks.push('Secure storage not available');
       }
 
-      // Check if running in Expo Go (not recommended for production)
-      if (Application.applicationId === 'host.exp.exponent') {
+      // Check if running in Expo Go
+      const isExpoGo = Application.applicationId === 'host.exp.exponent';
+      if (isExpoGo) {
         risks.push('Running in Expo Go');
       }
 
-      this.isDeviceSecure = risks.length === 0;
+      // Check Secure Enclave
+      const hasSecureEnclave = await this.useSecureEnclave();
+      if (!hasSecureEnclave) {
+        risks.push('Secure Enclave not available');
+      }
+
+      // In development, we only care about critical security features
+      this.isDeviceSecure = __DEV__ 
+        ? risks.length === 0  // In dev, ignore warnings
+        : risks.length === 0 && warnings.length === 0; // In prod, check both
+      
       return {
         isSecure: this.isDeviceSecure,
-        risks
+        risks: __DEV__ ? risks : [...risks, ...warnings]
       };
     } catch (error) {
-      console.error('Error verifying device security:', error);
+      console.error('Error during security verification:', error);
       risks.push('Error during security verification');
       this.isDeviceSecure = false;
       return {
@@ -108,9 +121,12 @@ class SecureStorage {
 
   private async useSecureEnclave(): Promise<boolean> {
     try {
+      if (!SecureWallet) {
+        return false;
+      }
       return await SecureWallet.isSecureEnclaveAvailable();
     } catch (error) {
-      console.warn('Secure Enclave check failed:', error);
+      console.error('Secure Enclave check failed:', error);
       return false;
     }
   }

@@ -23,6 +23,7 @@ ios/*
 !ios/SecureWallet.h
 !ios/SecureWallet.m
 !ios/Podfile
+!ios/SecureWallet.podspec
 ios/Pods/
 ios/build/
 ios/DerivedData/

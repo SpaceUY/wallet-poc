@@ -34,30 +34,32 @@ static NSArray *const kBIP39Words = @[
     
     // Convert entropy to bits
     const uint8_t *bytes = entropy.bytes;
-    for (int i = 0; i < entropy.length; i++) {
+    for (NSUInteger i = 0; i < entropy.length; i++) {
         for (int j = 7; j >= 0; j--) {
             [bits appendString:((bytes[i] >> j) & 1) ? @"1" : @"0"];
         }
     }
     
     // Add checksum bits
-    int checksumBits = entropy.length / 4;
-    for (int i = 0; i < checksumBits; i++) {
+    NSUInteger checksumBits = entropy.length / 4;
+    for (NSUInteger i = 0; i < checksumBits; i++) {
         [bits appendString:((hash[0] >> (7 - i)) & 1) ? @"1" : @"0"];
     }
     
     // Convert bits to words
     NSMutableArray *words = [NSMutableArray array];
-    for (int i = 0; i < bits.length; i += 11) {
+    for (NSUInteger i = 0; i < bits.length; i += 11) {
         NSString *wordBits = [bits substringWithRange:NSMakeRange(i, 11)];
-        int wordIndex = (int)strtol(wordBits.UTF8String, NULL, 2);
+        NSUInteger wordIndex = strtoul([wordBits UTF8String], NULL, 2);
+        // Use modulo to keep index within our limited word list
+        wordIndex = wordIndex % [kBIP39Words count];
         [words addObject:kBIP39Words[wordIndex]];
     }
     
     return [words componentsJoinedByString:@" "];
 }
 
-- (NSData *)generateSecureEntropy:(int)bytes {
+- (NSData *)generateSecureEntropy:(NSUInteger)bytes {
     NSMutableData *entropy = [NSMutableData dataWithLength:bytes];
     if (SecRandomCopyBytes(kSecRandomDefault, bytes, entropy.mutableBytes) == errSecSuccess) {
         return entropy;
@@ -84,7 +86,8 @@ static NSArray *const kBIP39Words = @[
     
     if ([context canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics
                             error:&error]) {
-        return context.biometryType != LABiometryNone;
+        // Use the new API
+        return context.biometryType != LABiometryTypeNone;
     }
     return NO;
 }
@@ -135,7 +138,7 @@ RCT_EXPORT_METHOD(generateSecureWallet:(NSDictionary *)config
         
         // Generate key pair in Secure Enclave
         CFErrorRef error = NULL;
-        SecKeyRef privateKey = SecKeyCreateRandomKey(attributes, &error);
+        SecKeyRef privateKey = SecKeyCreateRandomKey((__bridge CFDictionaryRef)attributes, &error);
         
         if (!privateKey) {
             NSError *err = (__bridge_transfer NSError *)error;
