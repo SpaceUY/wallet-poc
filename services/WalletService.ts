@@ -1,6 +1,6 @@
 import { ENV } from '@/config/env';
-import { ethers } from 'ethers';
 import { secureStorage } from '@/utils/secureStorage';
+import { ethers } from 'ethers';
 
 export class WalletService {
   private static instance: WalletService;
@@ -24,14 +24,21 @@ export class WalletService {
     return isSecure;
   }
 
-  async createWallet(): Promise<{ address: string }> {
+  async createWallet(useSoftware = false): Promise<{ address: string }> {
     try {
-      // Generate key pair in secure hardware
-      const { address } = await secureStorage.generateKeyPair('primary');
+      // Check if hardware security is available when not explicitly using software
+      if (!useSoftware) {
+        const isSecure = await this.isSecureEnvironmentAvailable();
+        if (!isSecure) {
+          throw new Error('Hardware security not available. Use software wallet or check device security.');
+        }
+      }
+
+      const { address } = await secureStorage.generateKeyPair('primary', useSoftware);
       return { address };
     } catch (error) {
       console.error('Error creating wallet:', error);
-      throw new Error('Failed to create wallet securely');
+      throw error;
     }
   }
 

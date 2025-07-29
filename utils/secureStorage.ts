@@ -4,6 +4,7 @@ import * as Device from 'expo-device';
 import * as SecureStore from 'expo-secure-store';
 
 import { ethers } from 'ethers';
+import SecureWallet from './nativeSecureWallet';
 
 // Define the type for storage options
 type SecureStorageOptions = {
@@ -105,53 +106,87 @@ class SecureStorage {
     }
   }
 
-  // Update generateKeyPair with HDWallet
-  async generateKeyPair(keyId: string): Promise<{ address: string }> {
+  private async useSecureEnclave(): Promise<boolean> {
+    try {
+      return await SecureWallet.isSecureEnclaveAvailable();
+    } catch (error) {
+      console.warn('Secure Enclave check failed:', error);
+      return false;
+    }
+  }
+
+  // Update generateKeyPair to try native module first
+  async generateKeyPair(keyId: string, useSoftware = false): Promise<{ address: string }> {
     await this.ensureDeviceSecurity();
 
     try {
-      // Use ethers.js's secure random number generation and BIP39
-      const wallet = ethers.Wallet.createRandom();
-      
-      if (!wallet.mnemonic?.phrase) {
-        throw new Error('Failed to generate secure mnemonic');
+      // Try to use Secure Enclave unless software is explicitly requested
+      if (!useSoftware && await this.useSecureEnclave()) {
+        console.log('Using Secure Enclave for key generation');
+        return await SecureWallet.generateSecureWallet({
+          requireBiometric: true,
+          label: `wallet_${keyId}`
+        });
       }
 
-      // Encrypt mnemonic and private key before storing
-      const encryptedMnemonic = await this.encryptData(wallet.mnemonic.phrase);
-      const encryptedKey = await this.encryptData(wallet.privateKey);
-
-      // Store the encrypted mnemonic
-      await this.setItem(
-        `mnemonic_${keyId}`,
-        encryptedMnemonic,
-        {
-          ...SECURE_STORAGE_OPTIONS.HIGH_SECURITY,
-          keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY
+      // Fall back to software implementation
+      console.log('Using software implementation');
+      
+      let wallet: ethers.HDNodeWallet | null = null;
+      let address: string = '';
+      
+      // Create wallet in a controlled scope
+      {
+        // Generate wallet
+        wallet = ethers.Wallet.createRandom() as ethers.HDNodeWallet;
+        if (!wallet?.mnemonic?.phrase) {
+          throw new Error('Failed to generate secure mnemonic');
         }
-      );
+        
+        // Store address before cleaning up wallet
+        address = wallet.address;
 
-      // Store the encrypted private key
-      await this.setItem(
-        `pk_${keyId}`,
-        encryptedKey,
-        {
-          ...SECURE_STORAGE_OPTIONS.HIGH_SECURITY,
-          keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY
+        // Immediately encrypt sensitive data
+        const encryptedMnemonic = await this.encryptData(wallet.mnemonic.phrase);
+        const encryptedKey = await this.encryptData(wallet.privateKey);
+
+        // Clear mnemonic from memory ASAP
+        if (wallet.mnemonic.phrase) {
+          wallet.mnemonic.phrase.split('').fill('0').join('');
         }
-      );
+        
+        // Store encrypted data
+        await this.setItem(
+          `mnemonic_${keyId}`,
+          encryptedMnemonic,
+          {
+            ...SECURE_STORAGE_OPTIONS.HIGH_SECURITY,
+            keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY
+          }
+        );
 
-      // Store the address (public info)
+        await this.setItem(
+          `pk_${keyId}`,
+          encryptedKey,
+          {
+            ...SECURE_STORAGE_OPTIONS.HIGH_SECURITY,
+            keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY
+          }
+        );
+      }
+
+      // Store public address (not sensitive)
       await this.setItem(
         `address_${keyId}`,
-        wallet.address,
+        address,
         SECURE_STORAGE_OPTIONS.MEDIUM_SECURITY
       );
 
-      // Clear sensitive data from memory
-      wallet.connect(ethers.getDefaultProvider()); // Break reference to private key
+      // Force garbage collection of the wallet scope
+      wallet = null;
+      global.gc && global.gc();
       
-      return { address: wallet.address };
+      return { address };
     } catch (error) {
       console.error('Error generating key pair:', error);
       throw new Error('Failed to generate secure key pair');

@@ -2,8 +2,6 @@
 
 # dependencies
 node_modules/
-ios
-android
 
 # Expo
 .expo/
@@ -19,6 +17,23 @@ expo-env.d.ts
 *.p12
 *.key
 *.mobileprovision
+
+# iOS specific
+ios/*
+!ios/SecureWallet.h
+!ios/SecureWallet.m
+!ios/Podfile
+ios/Pods/
+ios/build/
+ios/DerivedData/
+
+# Android specific
+android/*
+!android/app/src/main/java/com/walletpoc/
+android/app/build/
+android/build/
+android/gradle/
+android/local.properties
 
 # Metro
 .metro-health-check*

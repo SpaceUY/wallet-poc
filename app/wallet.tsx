@@ -1,12 +1,12 @@
-import { Alert, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, TextInput, TouchableWithoutFeedback } from 'react-native';
 import { useEffect, useState } from 'react';
+import { Alert, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, TextInput, TouchableWithoutFeedback } from 'react-native';
 
-import Clipboard from '@react-native-clipboard/clipboard';
 import { ThemedText as Text } from '@/components/ThemedText';
 import { ThemedView as View } from '@/components/ThemedView';
-import { secureStorage } from '@/utils/secureStorage';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { walletService } from '@/services/WalletService';
+import { secureStorage } from '@/utils/secureStorage';
+import Clipboard from '@react-native-clipboard/clipboard';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function TestWalletScreen() {
   const insets = useSafeAreaInsets();
@@ -48,12 +48,12 @@ export default function TestWalletScreen() {
     checkExistingWallet();
   }, []);
 
-  const testCreateWallet = async () => {
+  const testCreateWallet = async (useSoftware?: boolean) => {
     try {
       setStatus('Creating wallet...');
-      const { address } = await walletService.createWallet();
+      const { address } = await walletService.createWallet(useSoftware);
       setWalletInfo({ address });
-      setStatus('Wallet created successfully!');
+      setStatus(`${useSoftware ? 'Software' : 'Hardware'} wallet created successfully!`);
       
       // Get initial balance
       const balance = await walletService.getBalance(address);
@@ -248,6 +248,16 @@ export default function TestWalletScreen() {
     }
   };
 
+  const createHardwareWallet = async () => {
+    if (walletInfo.address) return;
+    await testCreateWallet(false);
+  };
+
+  const createSoftwareWallet = async () => {
+    if (walletInfo.address) return;
+    await testCreateWallet(true);
+  };
+
   return (
     <View style={[
       styles.container,
@@ -410,9 +420,20 @@ export default function TestWalletScreen() {
                 styles.button, 
                 walletInfo.address ? styles.buttonDisabled : {}
               ]} 
-              onPress={walletInfo.address ? undefined : testCreateWallet}
+              onPress={createHardwareWallet}
             >
-              {walletInfo.address ? 'Wallet Created' : 'Create Wallet'}
+              {walletInfo.address ? 'Wallet Created' : 'Create Hardware Wallet'}
+            </Text>
+
+            <Text 
+              style={[
+                styles.button, 
+                styles.softwareButton,
+                walletInfo.address ? styles.buttonDisabled : {}
+              ]} 
+              onPress={createSoftwareWallet}
+            >
+              Create Software Wallet (Less Secure)
             </Text>
             
             {walletInfo.address && (
@@ -568,5 +589,8 @@ const styles = StyleSheet.create({
   okButton: {
     flex: 1,
     backgroundColor: '#4CAF50',
+  },
+  softwareButton: {
+    backgroundColor: '#666',
   },
 }); 
