@@ -121,12 +121,12 @@ class SecureStorage {
 
   private async useSecureEnclave(): Promise<boolean> {
     try {
-      if (!SecureWallet) {
-        return false;
-      }
-      return await SecureWallet.isSecureEnclaveAvailable();
+      console.log('Checking SecureWallet native module:', SecureWallet ? 'Found' : 'Not found');
+      const isAvailable = await SecureWallet.isSecureEnclaveAvailable();
+      console.log('SecureWallet.isSecureEnclaveAvailable() result:', isAvailable);
+      return isAvailable;
     } catch (error) {
-      console.error('Secure Enclave check failed:', error);
+      console.error('Error checking Secure Enclave:', error);
       return false;
     }
   }
@@ -137,16 +137,31 @@ class SecureStorage {
 
     try {
       // Try to use Secure Enclave unless software is explicitly requested
-      if (!useSoftware && await this.useSecureEnclave()) {
-        console.log('Using Secure Enclave for key generation');
-        return await SecureWallet.generateSecureWallet({
-          requireBiometric: true,
-          label: `wallet_${keyId}`
-        });
+      if (!useSoftware) {
+        console.log('Checking SecureWallet native module:', SecureWallet ? 'Found' : 'Not found');
+        const canUseSecureEnclave = await this.useSecureEnclave();
+        console.log('Can use Secure Enclave:', canUseSecureEnclave);
+        
+        if (canUseSecureEnclave) {
+          console.log('Attempting to generate wallet using Secure Enclave...');
+          try {
+            const result = await SecureWallet.generateSecureWallet({
+              requireBiometric: true,
+              label: `wallet_${keyId}`
+            });
+            console.log('Secure Enclave wallet generation result:', result);
+            return result;
+          } catch (error) {
+            console.error('Error in Secure Enclave wallet generation:', error);
+            throw error;
+          }
+        } else {
+          console.log('Secure Enclave not available, falling back to software implementation');
+        }
       }
 
       // Fall back to software implementation
-      console.log('Using software implementation');
+      console.log('Using software implementation for wallet generation');
       
       let wallet: ethers.HDNodeWallet | null = null;
       let address: string = '';
