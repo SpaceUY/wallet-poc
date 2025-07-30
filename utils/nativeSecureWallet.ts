@@ -37,6 +37,9 @@ interface SecureWalletInterface {
 
 const { SecureWallet } = NativeModules;
 
+console.log('NativeModules:', Object.keys(NativeModules));
+console.log('SecureWallet module:', SecureWallet);
+
 // Create a fallback implementation if the native module is not available
 const createFallbackSecureWallet = (): SecureWalletInterface => {
   console.warn('SecureWallet native module not found, using fallback implementation');

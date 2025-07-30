@@ -7,7 +7,7 @@ const OWNER = "spaceuy";
 // App production config
 const APP_NAME = "Wallet POC";
 const BUNDLE_IDENTIFIER = "com.space.wallet-poc";
-const PACKAGE_NAME = "com.space.wallet-poc";
+const PACKAGE_NAME = "com.space.walletpoc";
 const ICON = "./assets/images/icons/iOS-Prod.png";
 const ADAPTIVE_ICON = "./assets/images/icons/Android-Prod.png";
 const SCHEME = "app-scheme";
@@ -35,6 +35,17 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       bundleIdentifier: bundleIdentifier,
       config: {
         usesNonExemptEncryption: false
+      },
+      entitlements: {
+        "keychain-access-groups": [
+          "$(AppIdentifierPrefix)com.space.wallet-poc"
+        ],
+        "com.apple.developer.default-data-protection": "NSFileProtectionComplete"
+      },
+      infoPlist: {
+        NSFaceIDUsageDescription: "This app uses Face ID to securely authenticate wallet access and transactions.",
+        NSLocalNetworkUsageDescription: "This app may access your local network to connect to blockchain nodes.",
+        ITSAppUsesNonExemptEncryption: false
       }
     },
     android: {
@@ -71,6 +82,13 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           backgroundColor: "#ffffff",
         },
       ],
+      [
+        "expo-secure-store",
+        {
+          faceIDPermission: "Allow $(PRODUCT_NAME) to access your biometric data for secure wallet authentication."
+        }
+      ],
+      "./plugins/SecureWalletPlugin.js"
     ],
     experiments: {
       typedRoutes: true,
