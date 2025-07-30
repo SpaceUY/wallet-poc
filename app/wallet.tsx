@@ -1,15 +1,42 @@
-import { useEffect, useState } from 'react';
 import { Alert, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, TextInput, TouchableWithoutFeedback } from 'react-native';
+import React, { useEffect, useState } from 'react';
 
+import Clipboard from '@react-native-clipboard/clipboard';
 import { ThemedText as Text } from '@/components/ThemedText';
 import { ThemedView as View } from '@/components/ThemedView';
+import { secureStorage } from '@/utils/secureStorage';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useThemeColor } from '@/hooks/useThemeColor';
 import { walletService } from '@/services/WalletService';
-import { secureStorage } from '@/utils/secureStorage';
-import Clipboard from '@react-native-clipboard/clipboard';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-export default function TestWalletScreen() {
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error('Wallet Error:', error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorTitle}>Something went wrong</Text>
+          <Text style={styles.errorText}>Please restart the app</Text>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function WalletScreenContent() {
   const insets = useSafeAreaInsets();
   
   // Theme colors
@@ -87,6 +114,9 @@ export default function TestWalletScreen() {
     try {
       setStatus('Creating wallet...');
       const { address } = await walletService.createWallet(useSoftware);
+      if (!address) {
+        throw new Error('Failed to create wallet - no address returned');
+      }
       setWalletInfo({ address });
       setStatus(`${useSoftware ? 'Software' : 'Hardware'} wallet created successfully!`);
       
@@ -94,7 +124,16 @@ export default function TestWalletScreen() {
       const balance = await walletService.getBalance(address);
       setWalletInfo(prev => ({ ...prev, balance }));
     } catch (error) {
-      setStatus(`Error creating wallet: ${error}`);
+      console.error('Error creating wallet:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      setStatus(`Error creating wallet: ${errorMessage}`);
+      
+      // Show detailed error in an alert for production debugging
+      Alert.alert(
+        'Wallet Creation Failed',
+        `Error: ${errorMessage}\n\nThis will help debug the issue in production.`,
+        [{ text: 'OK' }]
+      );
     }
   };
 
@@ -109,7 +148,8 @@ export default function TestWalletScreen() {
       setWalletInfo(prev => ({ ...prev, balance }));
       setStatus(`Balance updated!`);
     } catch (error) {
-      setStatus(`Error getting balance: ${error}`);
+      console.error('Error getting balance:', error);
+      setStatus(`Error getting balance: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
@@ -165,7 +205,7 @@ export default function TestWalletScreen() {
                 await testGetBalance();
               } catch (error) {
                 console.error('Transaction failed:', error);
-                setStatus(`Transaction failed: ${error}`);
+                setStatus(`Transaction failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
                 Alert.alert(
                   'Transaction Failed',
                   'The transaction could not be completed. Please try again.'
@@ -178,14 +218,20 @@ export default function TestWalletScreen() {
         ]
       );
     } catch (error) {
-      setStatus(`Error sending transaction: ${error}`);
+      console.error('Error sending transaction:', error);
+      setStatus(`Error sending transaction: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
   const copyAddressToClipboard = async () => {
-    if (walletInfo.address) {
-      await Clipboard.setString(walletInfo.address);
-      setStatus('Address copied to clipboard!');
+    try {
+      if (walletInfo.address) {
+        await Clipboard.setString(walletInfo.address);
+        setStatus('Address copied to clipboard!');
+      }
+    } catch (error) {
+      console.error('Error copying address:', error);
+      setStatus('Error copying address to clipboard');
     }
   };
 
@@ -203,55 +249,61 @@ export default function TestWalletScreen() {
             text: 'View Key',
             style: 'destructive',
             onPress: async () => {
-              setStatus('Retrieving private key...');
-              const privateKey = await secureStorage.getPrivateKey('primary');
-              if (privateKey) {
-                // Show key with timeout
-                Alert.alert(
-                  'Private Key',
-                  privateKey,
-                  [
-                    {
-                      text: 'Copy to Clipboard',
-                      onPress: () => {
-                        Clipboard.setString(privateKey);
-                        // Clear clipboard after 30 seconds
-                        setTimeout(() => {
-                          Clipboard.setString('');
-                        }, 30000);
-                        setStatus('Private key copied to clipboard (will clear in 30s)');
+              try {
+                setStatus('Retrieving private key...');
+                const privateKey = await secureStorage.getPrivateKey('primary');
+                if (privateKey) {
+                  // Show key with timeout
+                  Alert.alert(
+                    'Private Key',
+                    privateKey,
+                    [
+                      {
+                        text: 'Copy to Clipboard',
+                        onPress: () => {
+                          Clipboard.setString(privateKey);
+                          // Clear clipboard after 30 seconds
+                          setTimeout(() => {
+                            Clipboard.setString('');
+                          }, 30000);
+                          setStatus('Private key copied to clipboard (will clear in 30s)');
+                        }
+                      },
+                      { 
+                        text: 'Close',
+                        style: 'cancel',
+                        onPress: () => {
+                          // Clear the private key from memory
+                          privateKey.split('').fill('0').join('');
+                        }
                       }
-                    },
+                    ],
                     { 
-                      text: 'Close',
-                      style: 'cancel',
-                      onPress: () => {
+                      cancelable: true,
+                      onDismiss: () => {
                         // Clear the private key from memory
                         privateKey.split('').fill('0').join('');
                       }
                     }
-                  ],
-                  { 
-                    cancelable: true,
-                    onDismiss: () => {
-                      // Clear the private key from memory
-                      privateKey.split('').fill('0').join('');
-                    }
-                  }
-                );
+                  );
 
-                // Auto-dismiss after 60 seconds
-                setTimeout(() => {
-                  Alert.alert('', ''); // This dismisses any open alert
-                }, 60000);
+                  // Auto-dismiss after 60 seconds
+                  setTimeout(() => {
+                    Alert.alert('', ''); // This dismisses any open alert
+                  }, 60000);
+                }
+                setStatus('Ready');
+              } catch (error) {
+                console.error('Error retrieving private key:', error);
+                setStatus(`Error retrieving private key: ${error instanceof Error ? error.message : 'Unknown error'}`);
               }
-              setStatus('Ready');
             },
           },
         ]
       );
     } catch (error) {
-      setStatus(`Error retrieving private key: ${error}`);
+      console.error('Error in viewPrivateKey:', error);
+      setStatus(`Error retrieving private key: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
@@ -270,16 +322,22 @@ export default function TestWalletScreen() {
             text: 'Delete',
             style: 'destructive',
             onPress: async () => {
-              setStatus('Deleting wallet...');
-              await walletService.deleteWallet();
-              setWalletInfo({});
-              setStatus('Wallet deleted!');
+              try {
+                setStatus('Deleting wallet...');
+                await walletService.deleteWallet();
+                setWalletInfo({});
+                setStatus('Wallet deleted!');
+              } catch (error) {
+                console.error('Error deleting wallet:', error);
+                setStatus(`Error deleting wallet: ${error instanceof Error ? error.message : 'Unknown error'}`);
+              }
             },
           },
         ]
       );
     } catch (error) {
-      setStatus(`Error deleting wallet: ${error}`);
+      console.error('Error in testDeleteWallet:', error);
+      setStatus(`Error deleting wallet: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
@@ -484,6 +542,31 @@ export default function TestWalletScreen() {
             >
               Create Software Wallet (Less Secure)
             </Text>
+
+            {/* Debug button - always visible */}
+            <Text 
+              style={[styles.button, { backgroundColor: buttonWarning }]} 
+              onPress={async () => {
+                try {
+                  setStatus('Running debug...');
+                  const debug = await walletService.debugWalletCreation();
+                  console.log('Debug info:', debug);
+                  Alert.alert('Debug Info', 
+                    `Secure Enclave: ${debug.secureEnclaveAvailable ? 'Available' : 'Not Available'}\n` +
+                    `Secure Storage: ${debug.secureStorageAvailable ? 'Available' : 'Not Available'}\n` +
+                    `Existing Wallet: ${debug.existingWallet ? 'Found' : 'None'}\n` +
+                    `Test Wallet Creation: ${debug.testWalletCreation?.success ? 'Success' : 'Failed'}\n` +
+                    `${debug.testWalletCreation?.error ? `Error: ${debug.testWalletCreation.error}` : ''}`
+                  );
+                  setStatus('Debug completed');
+                } catch (error) {
+                  console.error('Debug failed:', error);
+                  setStatus(`Debug failed: ${error}`);
+                }
+              }}
+            >
+              Debug Wallet Creation
+            </Text>
             
             {walletInfo.address && (
               <>
@@ -509,18 +592,28 @@ export default function TestWalletScreen() {
                   View Private Key
                 </Text>
 
-                <Text 
-                  style={[styles.button, styles.deleteButton, { backgroundColor: buttonDanger }]} 
-                  onPress={testDeleteWallet}
-                >
-                  Delete Wallet
-                </Text>
+                                 <Text 
+                   style={[styles.button, styles.deleteButton, { backgroundColor: buttonDanger }]} 
+                   onPress={testDeleteWallet}
+                 >
+                   Delete Wallet
+                 </Text>
+
+
               </>
             )}
           </View>
         </ScrollView>
       </View>
     </View>
+  );
+}
+
+export default function TestWalletScreen() {
+  return (
+    <ErrorBoundary>
+      <WalletScreenContent />
+    </ErrorBoundary>
   );
 }
 
@@ -630,5 +723,20 @@ const styles = StyleSheet.create({
   },
   softwareButton: {
     // backgroundColor will be set dynamically
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  errorTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  errorText: {
+    fontSize: 16,
+    textAlign: 'center',
   },
 }); 

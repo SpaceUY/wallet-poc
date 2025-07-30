@@ -1,0 +1,46 @@
+{
+  "cli": {
+    "version": ">= 14.4.1",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": {
+        "APP_ENV": "development"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "env": {
+        "APP_ENV": "preview"
+      },
+      "prebuildCommand": "npx expo prebuild --platform ios"
+    },
+    "production": {
+      "autoIncrement": true,
+      "env": {
+        "APP_ENV": "production"
+      },
+      "prebuildCommand": "npx expo prebuild --platform ios"
+    },
+    "ios-simulator": {
+      "extends": "development",
+      "ios": {
+        "simulator": true
+      }
+    }
+  },
+
+    "submit": {
+      "production": {
+        "ios": {
+          "appleId": "info@spacedev.uy",
+          "ascAppId": "6749324400",
+          "bundleIdentifier": "com.space.wallet-poc"
+        }
+      }
+    }
+
+}

@@ -37,10 +37,24 @@ interface SecureWalletInterface {
 
 const { SecureWallet } = NativeModules;
 
-if (!SecureWallet) {
-  throw new Error(
-    'SecureWallet native module not found. Make sure you have run pod install and rebuilt your app.'
-  );
-}
+// Create a fallback implementation if the native module is not available
+const createFallbackSecureWallet = (): SecureWalletInterface => {
+  console.warn('SecureWallet native module not found, using fallback implementation');
+  
+  return {
+    isSecureEnclaveAvailable: async () => false,
+    checkForExistingWallet: async () => null,
+    generateSecureWallet: async () => {
+      throw new Error('SecureWallet native module not available');
+    },
+    signTransactionHash: async () => {
+      throw new Error('SecureWallet native module not available');
+    },
+    signTransaction: async () => {
+      throw new Error('SecureWallet native module not available');
+    },
+    deleteWallet: async () => false,
+  };
+};
 
-export default SecureWallet as SecureWalletInterface;
+export default (SecureWallet || createFallbackSecureWallet()) as SecureWalletInterface;

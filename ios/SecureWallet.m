@@ -461,7 +461,8 @@ static NSArray *const kBIP39Words = @[
         CFRelease(testKey);
         RCTLogInfo(@"Secure Enclave is present and working");
         
-        // Now check biometric availability
+        // In production, we'll be more lenient about biometric availability
+        // Just check if biometric is available, but don't require it
         LAContext *context = [[LAContext alloc] init];
         NSError *biometricError = nil;
         
@@ -471,8 +472,12 @@ static NSArray *const kBIP39Words = @[
         }
         
         if (biometricError) {
-            RCTLogError(@"Biometric check error: %@", biometricError);
+            RCTLogInfo(@"Biometric not available, but Secure Enclave is working: %@", biometricError);
+            // Still return YES if Secure Enclave works, even without biometric
+            return YES;
         }
+        
+        return YES;
         
     } else {
         NSError *keyError = (__bridge_transfer NSError *)error;

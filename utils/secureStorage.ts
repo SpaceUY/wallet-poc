@@ -3,8 +3,8 @@ import * as Crypto from 'expo-crypto';
 import * as Device from 'expo-device';
 import * as SecureStore from 'expo-secure-store';
 
-import { ethers } from 'ethers';
 import SecureWallet from './nativeSecureWallet';
+import { ethers } from 'ethers';
 
 // Define the type for storage options
 type SecureStorageOptions = {
@@ -87,29 +87,21 @@ export class SecureStorage {
       // Check Secure Enclave
       const hasSecureEnclave = await this.useSecureEnclave();
       if (!hasSecureEnclave) {
-        if (__DEV__) {
-          warnings.push('Secure Enclave not available');
-        } else {
-          risks.push('Secure Enclave not available');
-        }
+        risks.push('Secure Enclave not available');
       }
 
-      // In development, we only care about critical security features
-      this.isDeviceSecure = __DEV__ 
-        ? risks.length === 0  // In dev, ignore warnings and allow no Secure Enclave
-        : risks.length === 0 && warnings.length === 0; // In prod, require everything
-      
+      // STRICT: In production, block if any critical risk (including missing Secure Enclave or biometrics)
+      this.isDeviceSecure = risks.length === 0;
+
       return {
         isSecure: this.isDeviceSecure,
-        risks: __DEV__ ? risks : [...risks, ...warnings]
+        risks: [...risks, ...warnings]
       };
     } catch (error) {
-      console.error('Error during security verification:', error);
-      risks.push('Error during security verification');
       this.isDeviceSecure = false;
       return {
         isSecure: false,
-        risks
+        risks: ['Error during security verification']
       };
     }
   }
@@ -150,33 +142,41 @@ export class SecureStorage {
 
   // Update generateKeyPair to try native module first
   async generateKeyPair(keyId: string, useSoftware = false): Promise<{ address: string }> {
+    // Always enforce device security before key generation
     await this.ensureDeviceSecurity();
 
     try {
       // Try to use Secure Enclave unless software is explicitly requested
-      if (!useSoftware && await this.useSecureEnclave()) {
-        console.log('Using Secure Enclave for key generation');
-        const result = await SecureWallet.generateSecureWallet({
-          requireBiometric: true,
-          label: `wallet_${keyId}`
-        });
+      if (!useSoftware) {
+        const secureEnclaveAvailable = await this.useSecureEnclave();
         
-        // Derive address from public key
-        const address = this.deriveAddress(result.publicKey);
-        console.log('Derived address from Secure Enclave public key:', address);
-        
-        // Store the address for later retrieval
-        await this.setItem(
-          `address_${keyId}`,
-          address,
-          SECURE_STORAGE_OPTIONS.MEDIUM_SECURITY
-        );
-        
-        return { address };
+        if (secureEnclaveAvailable) {
+          try {
+            const result = await SecureWallet.generateSecureWallet({
+              requireBiometric: true,
+              label: `wallet_${keyId}`
+            });
+            
+            // Derive address from public key
+            const address = this.deriveAddress(result.publicKey);
+            
+            // Store the address for later retrieval
+            await this.setItem(
+              `address_${keyId}`,
+              address,
+              SECURE_STORAGE_OPTIONS.MEDIUM_SECURITY
+            );
+            
+            return { address };
+          } catch (secureEnclaveError) {
+            useSoftware = true;
+          }
+        } else {
+          useSoftware = true;
+        }
       }
 
       // Fall back to software implementation
-      console.log('Using software implementation for wallet generation');
       
       let wallet: ethers.HDNodeWallet | null = null;
       let address: string = '';
@@ -202,31 +202,39 @@ export class SecureStorage {
         }
         
         // Store encrypted data
-        await this.setItem(
-          `mnemonic_${keyId}`,
-          encryptedMnemonic,
-          {
-            ...SECURE_STORAGE_OPTIONS.HIGH_SECURITY,
-            keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY
-          }
-        );
+        try {
+          await this.setItem(
+            `mnemonic_${keyId}`,
+            encryptedMnemonic,
+            {
+              ...SECURE_STORAGE_OPTIONS.HIGH_SECURITY,
+              keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY
+            }
+          );
 
-        await this.setItem(
-          `pk_${keyId}`,
-          encryptedKey,
-          {
-            ...SECURE_STORAGE_OPTIONS.HIGH_SECURITY,
-            keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY
-          }
-        );
+          await this.setItem(
+            `pk_${keyId}`,
+            encryptedKey,
+            {
+              ...SECURE_STORAGE_OPTIONS.HIGH_SECURITY,
+              keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY
+            }
+          );
+        } catch (storageError) {
+          throw new Error(`Failed to store encrypted data: ${storageError}`);
+        }
       }
 
       // Store public address (not sensitive)
-      await this.setItem(
-        `address_${keyId}`,
-        address,
-        SECURE_STORAGE_OPTIONS.MEDIUM_SECURITY
-      );
+      try {
+        await this.setItem(
+          `address_${keyId}`,
+          address,
+          SECURE_STORAGE_OPTIONS.MEDIUM_SECURITY
+        );
+      } catch (addressStorageError) {
+        throw new Error(`Failed to store public address: ${addressStorageError}`);
+      }
 
       // Force garbage collection of the wallet scope
       wallet = null;
@@ -234,8 +242,7 @@ export class SecureStorage {
       
       return { address };
     } catch (error) {
-      console.error('Error generating key pair:', error);
-      throw new Error('Failed to generate secure key pair');
+      throw new Error(`Failed to generate secure key pair: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 

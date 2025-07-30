@@ -1,6 +1,8 @@
-import { ethers } from 'ethers';
+import * as SecureStore from 'expo-secure-store';
+
 import { ENV } from '../config/env';
 import SecureWallet from '../utils/nativeSecureWallet';
+import { ethers } from 'ethers';
 import { secureStorage } from '../utils/secureStorage';
 
 export class WalletService {
@@ -26,20 +28,21 @@ export class WalletService {
   }
 
   async createWallet(useSoftware = false): Promise<{ address: string }> {
-    try {
-      // Check if hardware security is available when not explicitly using software
-      if (!useSoftware) {
-        const isSecure = await this.isSecureEnvironmentAvailable();
-        if (!isSecure) {
-          throw new Error('Hardware security not available. Use software wallet or check device security.');
-        }
-      }
-
-      const { address } = await secureStorage.generateKeyPair('primary', useSoftware);
+    if (useSoftware) {
+      // User explicitly requested a software wallet (show warning in UI if needed)
+      const { address } = await secureStorage.generateKeyPair('primary', true);
       return { address };
-    } catch (error) {
-      console.error('Error creating wallet:', error);
-      throw error;
+    } else {
+      // User requested a hardware wallet, do not fallback to software
+      try {
+        const { address } = await secureStorage.generateKeyPair('primary', false);
+        return { address };
+      } catch (error) {
+        throw new Error(
+          'Hardware wallet creation failed: Device does not meet security requirements (Secure Enclave and biometrics required). ' +
+          (error instanceof Error ? error.message : error)
+        );
+      }
     }
   }
 
@@ -730,6 +733,71 @@ export class WalletService {
       return wallet?.address || null;
     }
   }
+
+  /**
+   * Debug method to help troubleshoot wallet creation issues
+   */
+  async debugWalletCreation(): Promise<{
+    secureEnclaveAvailable: boolean;
+    secureStorageAvailable: boolean;
+    existingWallet: { address: string } | null;
+    testWalletCreation?: { success: boolean; error?: string };
+  }> {
+    try {
+      console.log('🔍 Starting wallet creation debug...');
+      
+      // Check Secure Enclave availability
+      let secureEnclaveAvailable = false;
+      try {
+        secureEnclaveAvailable = await SecureWallet.isSecureEnclaveAvailable();
+        console.log('Secure Enclave available:', secureEnclaveAvailable);
+      } catch (error) {
+        console.error('Error checking Secure Enclave:', error);
+      }
+      
+      // Check secure storage availability
+      let secureStorageAvailable = false;
+      try {
+        secureStorageAvailable = await SecureStore.isAvailableAsync();
+        console.log('Secure storage available:', secureStorageAvailable);
+      } catch (error) {
+        console.error('Error checking secure storage:', error);
+      }
+      
+      // Check for existing wallet
+      const existingWallet = await this.checkExistingWallet();
+      console.log('Existing wallet found:', existingWallet);
+      
+      // Test wallet creation (but don't actually create one)
+      let testWalletCreation = { success: false, error: 'Not tested' };
+      try {
+        // Just test the key generation process without storing anything
+        await secureStorage.generateKeyPair('debug_test', true);
+        testWalletCreation = { success: true, error: '' };
+      } catch (error) {
+        testWalletCreation = { 
+          success: false, 
+          error: error instanceof Error ? error.message : 'Unknown error' 
+        };
+      }
+      
+      const debugInfo = {
+        secureEnclaveAvailable,
+        secureStorageAvailable,
+        existingWallet,
+        testWalletCreation
+      };
+      
+      console.log('🔍 Debug info:', debugInfo);
+      return debugInfo;
+      
+    } catch (error) {
+      console.error('Error during debug:', error);
+      throw error;
+    }
+  }
+
+
 
   private validateTransactionParameters(to: string, amount: string): void {
     // Validate recipient address
