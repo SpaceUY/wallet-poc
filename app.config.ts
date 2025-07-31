@@ -88,7 +88,6 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           faceIDPermission: "Allow $(PRODUCT_NAME) to access your biometric data for secure wallet authentication."
         }
       ],
-      "./plugins/SecureWalletPlugin.js"
     ],
     experiments: {
       typedRoutes: true,
