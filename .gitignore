@@ -19,16 +19,7 @@ expo-env.d.ts
 *.mobileprovision
 
 # iOS specific
-ios/*
-!ios/SecureWallet.h
-!ios/SecureWallet.m
-!ios/keccak256.h
-!ios/keccak256.c
-!ios/Podfile
-!ios/SecureWallet.podspec
-ios/Pods/
-ios/build/
-ios/DerivedData/
+ios/
 
 # Android specific
 android/*
