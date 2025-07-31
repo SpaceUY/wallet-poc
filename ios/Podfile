@@ -13,7 +13,7 @@ install! 'cocoapods',
 
 prepare_react_native_project!
 
-target 'walletpoc' do
+target 'WalletPOC' do
   use_expo_modules!
   pod 'SecureWallet', :path => '../ios'
   pod 'secp256k1', '~> 0.1.0'
