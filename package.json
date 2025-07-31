@@ -43,7 +43,7 @@
     "react-native-screens": "~4.11.1",
     "react-native-web": "~0.20.0",
     "react-native-webview": "13.13.5",
-    "secure-wallet-native": "^1.0.7"
+    "secure-wallet-native": "^1.0.8"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
