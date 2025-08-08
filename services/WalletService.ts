@@ -63,8 +63,20 @@ export class WalletService {
 
   async sendTransaction(to: string, amount: string): Promise<ethers.TransactionResponse> {
     try {
-      // For now, we'll use a simplified approach with ethers v6
-      // This will need to be updated for hardware wallet support
+      // Check if we have a hardware wallet first
+      const isSecure = await this.isSecureEnvironmentAvailable();
+      if (isSecure) {
+        try {
+          const hardwareWallet = await SecureWallet.checkForExistingWallet();
+          if (hardwareWallet) {
+            console.log('Using hardware wallet for transaction signing');
+            return await this.sendTransactionWithHybridApproach(to, amount);
+          }
+        } catch (e) {
+          console.log('No hardware wallet found, falling back to software wallet');
+        }
+      }
+
       const wallet = await this.getWallet();
       if (!wallet) {
         throw new Error('No wallet found');
@@ -168,6 +180,244 @@ export class WalletService {
     }
   }
 
+
+  /**
+   * Hybrid Approach Implementation:
+   * 1. JavaScript side creates unsigned transaction with all fields
+   * 2. RLP encodes it and creates Keccak-256 hash
+   * 3. Sends only the hash to native module for signing
+   * 4. Receives signature and reconstructs signed transaction
+   * 5. Broadcasts the transaction
+   */
+  private async sendTransactionWithHybridApproach(to: string, amount: string): Promise<ethers.TransactionResponse> {
+    try {
+      // Validate transaction parameters
+      this.validateTransactionParameters(to, amount);
+      
+      // First, we need to get the public key that will be used for signing
+      // We'll get this from the native module to ensure we're using the correct key
+      const hardwareWallet = await SecureWallet.checkForExistingWallet();
+      if (!hardwareWallet) throw new Error('No hardware wallet found');
+      
+      // For hardware wallets, we need to determine the actual signing address
+      // We'll do a test signature to get the real public key first
+      const dummyHash = ethers.keccak256('0x1234567890abcdef');
+      const testSignature = await SecureWallet.signTransactionHash(dummyHash);
+      const actualSigningAddress = this.deriveAddressFromPublicKey(testSignature.publicKey);
+      
+      if (__DEV__) {
+        console.log('Actual signing address determined:', actualSigningAddress);
+      }
+      
+      // Get gas price and estimate gas first
+      const feeData = await this.provider.getFeeData();
+      const gasPrice = feeData.gasPrice!;
+      
+      // Estimate gas
+      const gasLimit = await this.provider.estimateGas({
+        from: actualSigningAddress,
+        to: to,
+        value: ethers.parseEther(amount)
+      });
+
+      // Get current nonce for the signing address (get this right before creating transaction)
+      const nonce = await this.provider.getTransactionCount(actualSigningAddress);
+      if (__DEV__) {
+        console.log('Current nonce for address:', actualSigningAddress, 'is:', nonce);
+      }
+
+      // Create unsigned transaction object (use legacy format for compatibility)
+      const unsignedTx = {
+        to: to,
+        value: ethers.parseEther(amount),
+        nonce: nonce,
+        gasLimit: gasLimit,
+        gasPrice: gasPrice,
+        data: '0x',
+        chainId: await this.provider.getNetwork().then(net => net.chainId),
+        type: 0 // Legacy transaction type
+      };
+
+      if (__DEV__) {
+        console.log('Creating unsigned transaction:', unsignedTx);
+      }
+      
+      // Step 1: Create the transaction hash that needs to be signed
+      const transactionHash = ethers.keccak256(ethers.Transaction.from(unsignedTx).unsignedSerialized);
+      if (__DEV__) {
+        console.log('Transaction hash (Keccak-256):', transactionHash);
+      }
+      
+      // Step 2: Send only the hash to native module for signing
+      if (__DEV__) {
+        console.log('Sending transaction hash to Secure Enclave for signing...');
+      }
+      const signature = await SecureWallet.signTransactionHash(transactionHash);
+      if (__DEV__) {
+        console.log('Received signature from Secure Enclave:', signature);
+      }
+      
+      // Step 3: The signature is already in the correct format (object with r, s, v)
+      if (__DEV__) {
+        console.log('Using signature components:', signature);
+      }
+      
+      // Step 4: Use the v value from the native module (it's already calculated correctly)
+      const validSignature = {
+        r: signature.r.startsWith('0x') ? signature.r : '0x' + signature.r,
+        s: signature.s.startsWith('0x') ? signature.s : '0x' + signature.s,
+        v: signature.v
+      };
+      
+      // Step 5: Verify the signature using the public key from the native module
+      let recoveredAddress: string | null = null;
+      let correctV: number | null = null;
+      
+      try {
+        // Get the public key that was used for signing
+        const signingPublicKey = signature.publicKey;
+        console.log('Public key used for signing:', signingPublicKey);
+        
+        // Derive the address from this public key
+        const signatureAddress = this.deriveAddressFromPublicKey(signingPublicKey);
+        console.log('Address from signing public key:', signatureAddress);
+        
+        // Try both recovery IDs (v=27 and v=28) to find the correct one
+        for (let v = 27; v <= 28; v++) {
+          try {
+            const testSignature = {
+              r: validSignature.r,
+              s: validSignature.s,
+              v: v
+            };
+            
+            const testRecoveredAddress = ethers.recoverAddress(transactionHash, testSignature);
+            console.log(`Testing v=${v}, recovered address:`, testRecoveredAddress);
+            
+            if (testRecoveredAddress.toLowerCase() === signatureAddress.toLowerCase()) {
+              console.log(`✅ Found correct recovery ID: v=${v}`);
+              recoveredAddress = testRecoveredAddress;
+              correctV = v;
+              break;
+            }
+          } catch (error) {
+            console.log(`v=${v} failed:`, error instanceof Error ? error.message : 'Unknown error');
+          }
+        }
+        
+        if (!recoveredAddress) {
+          throw new Error('Could not find valid recovery ID for signature');
+        }
+        
+        console.log('✅ Signature verification successful!');
+        console.log('Correct recovery ID:', correctV);
+        console.log('Recovered address:', recoveredAddress);
+        console.log('Signing address:', signatureAddress);
+        
+        // Update the signature with the correct v value
+        validSignature.v = correctV!;
+      } catch (error) {
+        console.error('Signature verification failed:', error);
+        throw new Error('Invalid signature from Secure Enclave');
+      }
+      
+      if (!validSignature || !recoveredAddress) {
+        throw new Error('Could not find valid signature recovery');
+      }
+      
+      // Step 6: Reconstruct the signed transaction using ethers.js
+      // Create a transaction object with the signature
+      const signedTx = {
+        ...unsignedTx,
+        signature: validSignature
+      };
+      
+      // Use ethers.js to create the signed transaction
+      const transaction = ethers.Transaction.from(signedTx);
+      
+      console.log('Reconstructed signed transaction:', transaction.serialized);
+      console.log('Transaction from address:', transaction.from);
+      console.log('Transaction to address:', transaction.to);
+      console.log('Transaction value:', ethers.formatEther(transaction.value));
+      console.log('Transaction nonce:', transaction.nonce);
+      console.log('Transaction gas price:', ethers.formatUnits(transaction.gasPrice!, 'wei'));
+      console.log('Transaction gas limit:', transaction.gasLimit.toString());
+      
+      // Verify the transaction is from the correct address using the signing public key
+      // Since the signature proves which key was used, we should trust the recovered address
+      const signatureAddress = this.deriveAddressFromPublicKey(signature.publicKey);
+      console.log('Signing address from public key:', signatureAddress);
+      console.log('Recovered address from signature:', recoveredAddress);
+      console.log('Transaction from address:', transaction.from);
+      
+      // All three addresses should match
+      if (transaction.from?.toLowerCase() !== signatureAddress.toLowerCase() || 
+          recoveredAddress.toLowerCase() !== signatureAddress.toLowerCase()) {
+        throw new Error(`Address mismatch: signing=${signatureAddress}, recovered=${recoveredAddress}, transaction=${transaction.from}`);
+      }
+      
+      // Step 7: Broadcast the transaction with retry logic for nonce issues
+      let txResponse: ethers.TransactionResponse;
+      try {
+        txResponse = await this.provider.broadcastTransaction(transaction.serialized);
+        if (__DEV__) {
+          console.log('Transaction broadcasted:', txResponse.hash);
+        }
+      } catch (error) {
+        // If it's a nonce error, try once more with a fresh nonce
+        if (error instanceof Error && error.message.includes('nonce')) {
+          if (__DEV__) {
+            console.log('Nonce error detected, retrying with fresh nonce...');
+          }
+          
+          // Get fresh nonce and retry
+          const freshNonce = await this.provider.getTransactionCount(actualSigningAddress);
+          if (__DEV__) {
+            console.log('Fresh nonce for retry:', freshNonce);
+          }
+          const retryTx = {
+            ...unsignedTx,
+            nonce: freshNonce
+          };
+          
+          const retryHash = ethers.keccak256(ethers.Transaction.from(retryTx).unsignedSerialized);
+          const retrySignature = await SecureWallet.signTransactionHash(retryHash);
+          
+          // Reconstruct with fresh nonce
+          const retryValidSignature = {
+            r: retrySignature.r.startsWith('0x') ? retrySignature.r : '0x' + retrySignature.r,
+            s: retrySignature.s.startsWith('0x') ? retrySignature.s : '0x' + retrySignature.s,
+            v: retrySignature.v
+          };
+          
+          const retrySignedTx = {
+            ...retryTx,
+            signature: retryValidSignature
+          };
+          
+          const retryTransaction = ethers.Transaction.from(retrySignedTx);
+          txResponse = await this.provider.broadcastTransaction(retryTransaction.serialized);
+          
+          if (__DEV__) {
+            console.log('Retry transaction broadcasted:', txResponse.hash);
+          }
+        } else {
+          throw error;
+        }
+      }
+      
+      return txResponse;
+      
+    } catch (error) {
+      console.error('Error with hybrid transaction signing:', error);
+      throw new Error('Failed to send transaction with hybrid approach');
+    }
+  }
+
+  /**
+   * Check for existing wallet - NOTE: For hardware wallets, this may return an incorrect address
+   * due to key mismatch issues. Use getActualSigningAddress() for hardware wallets instead.
+   */
   async checkExistingWallet(): Promise<{ address: string; type?: 'hardware' | 'software' } | null> {
     try {
       // First verify device security
@@ -257,6 +507,25 @@ export class WalletService {
     } catch (error) {
       console.error('Error getting wallet address:', error);
       return null;
+    }
+  }
+
+  private validateTransactionParameters(to: string, amount: string): void {
+    // Validate recipient address
+    if (!to || !ethers.isAddress(to)) {
+      throw new Error('Invalid recipient address');
+    }
+    
+    // Validate amount
+    const amountWei = ethers.parseEther(amount);
+    if (amountWei <= 0n) {
+      throw new Error('Amount must be greater than 0');
+    }
+    
+    // Check for reasonable amount (prevent accidental large transfers)
+    const maxAmount = ethers.parseEther('1000'); // 1000 ETH max
+    if (amountWei > maxAmount) {
+      throw new Error('Amount exceeds maximum allowed (1000 ETH)');
     }
   }
 
