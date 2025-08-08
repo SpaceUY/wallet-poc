@@ -2,16 +2,15 @@ import React, { useState } from 'react';
 import { Alert, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 
 import { ThemedText as Text } from '@/components/ThemedText';
-import { ThemedView } from '@/components/ThemedView';
 import { createTheme } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { appSecurityService } from '@/services/AppSecurityService';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function SettingsScreen() {
-  const insets = useSafeAreaInsets();
+  const router = useRouter();
   const colorScheme = useColorScheme();
   const theme = createTheme(colorScheme ?? 'light');
   
@@ -31,17 +30,15 @@ export default function SettingsScreen() {
   };
 
   const handleSecurityPress = () => {
-    router.push('/(tabs)/security');
+    console.log('Navigating to security...');
+    router.push('/settings/security');
   };
 
   return (
-    <ThemedView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView
         style={styles.scrollView}
-        contentContainerStyle={[
-          styles.scrollContent,
-          { paddingBottom: insets.bottom + 20 }
-        ]}
+        contentContainerStyle={styles.scrollContent}
       >
         <View style={styles.content}>          
           <View style={[styles.section, { backgroundColor: theme.colors.cardBackground }]}>
@@ -242,7 +239,7 @@ export default function SettingsScreen() {
           </View>
         </View>
       </ScrollView>
-    </ThemedView>
+    </SafeAreaView>
   );
 }
 

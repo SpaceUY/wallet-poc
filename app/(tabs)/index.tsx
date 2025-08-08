@@ -38,13 +38,12 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
   }
 }
 
-function WalletScreenContent() {
+function WalletScreen() {
   const insets = useSafeAreaInsets();
   const { open } = useAppKit();
   const { address, isConnected, chainId } = useAccount();
   const { disconnect } = useDisconnect();
   
-  // Theme
   const colorScheme = useColorScheme();
   const theme = createTheme(colorScheme ?? 'light');
   
@@ -832,4 +831,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default WalletScreenContent; 
+export default WalletScreen; 
