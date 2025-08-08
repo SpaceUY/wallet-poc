@@ -40,8 +40,8 @@ export default function SettingsScreen() {
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
       >
-        <View style={styles.content}>          
-          <View style={[styles.section, { backgroundColor: theme.colors.cardBackground }]}>
+        <View style={[styles.content, { backgroundColor: theme.colors.background }]}>
+          <View style={[styles.section, { backgroundColor: theme.colors.cardBackground, borderColor: theme.colors.border }]}>
             <View style={styles.sectionHeader}>
               <Ionicons name="shield-checkmark" size={24} color={theme.colors.primary} />
               <Text style={styles.sectionTitle}>Security</Text>
@@ -268,6 +268,14 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     marginBottom: 16,
     overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   sectionHeader: {
     flexDirection: 'row',
