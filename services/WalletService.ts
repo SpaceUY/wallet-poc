@@ -63,31 +63,29 @@ export class WalletService {
 
   async sendTransaction(to: string, amount: string): Promise<ethers.TransactionResponse> {
     try {
-      // Check if we have a hardware wallet first
-      const isSecure = await this.isSecureEnvironmentAvailable();
-      if (isSecure) {
-        try {
-          const hardwareWallet = await SecureWallet.checkForExistingWallet();
-          if (hardwareWallet) {
-            console.log('Using hardware wallet for transaction signing');
-            return await this.sendTransactionWithHybridApproach(to, amount);
-          }
-        } catch (e) {
-          console.log('No hardware wallet found, falling back to software wallet');
-        }
-      }
-
-      const wallet = await this.getWallet();
-      if (!wallet) {
+    
+      const existingWallet = await this.checkExistingWallet();
+      if (!existingWallet) {
         throw new Error('No wallet found');
       }
 
-      const tx = await wallet.sendTransaction({
-        to: to,
-        value: parseEther(amount)
-      });
+      if (existingWallet.type === 'hardware') {
+        console.log('Using hardware wallet for transaction signing');
+        return await this.sendTransactionWithHybridApproach(to, amount);
+      } else {
+        console.log('Using software wallet for transaction signing');
+        const wallet = await this.getWallet();
+        if (!wallet) {
+          throw new Error('Software wallet not accessible');
+        }
 
-      return tx;
+        const tx = await wallet.sendTransaction({
+          to: to,
+          value: parseEther(amount)
+        });
+
+        return tx;
+      }
     } catch (error) {
       console.error('Error sending transaction:', error);
       throw error;
@@ -96,33 +94,27 @@ export class WalletService {
 
   async getWallet(): Promise<ethers.Wallet | null> {
     try {
-      // First check if we have a hardware wallet
-      const isSecure = await this.isSecureEnvironmentAvailable();
-      if (isSecure) {
-        try {
-          const hardwareWallet = await SecureWallet.checkForExistingWallet();
-          if (hardwareWallet) {
-            console.log('Found hardware wallet, but cannot return private key (it\'s in Secure Enclave)');
-            // For hardware wallets, we can't return the private key
-            // We'll need to handle signing differently
-            return null;
+      const existingWallet = await this.checkExistingWallet();
+      if (!existingWallet) {
+        return null;
+      }
+
+      // Only return ethers.Wallet for software wallets
+      if (existingWallet.type === 'software') {
+        const softwareWallet = await softwareWalletService.getWallet();
+        if (softwareWallet) {
+          // For software wallets, we need to get the private key for signing
+          const walletInfo = await softwareWalletService['getStoredWalletInfo']();
+          if (walletInfo) {
+            const wallet = new ethers.Wallet(walletInfo.privateKey);
+            return wallet.connect(this.provider);
           }
-        } catch (e) {
-          console.log('No hardware wallet found, checking software wallet');
         }
       }
 
-      // Check for software wallet
-      const softwareWallet = await softwareWalletService.getWallet();
-      if (softwareWallet) {
-        // For software wallets, we need to get the private key for signing
-        const walletInfo = await softwareWalletService['getStoredWalletInfo']();
-        if (walletInfo) {
-          const wallet = new ethers.Wallet(walletInfo.privateKey);
-          return wallet.connect(this.provider);
-        }
-      }
-
+      // For hardware wallets, we can't return the private key (it's in Secure Enclave)
+      // Hardware wallet signing is handled differently in sendTransaction
+      console.log('Hardware wallet detected - private key not accessible from Secure Enclave');
       return null;
     } catch (error) {
       console.error('Error getting wallet:', error);
