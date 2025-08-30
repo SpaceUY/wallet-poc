@@ -1,6 +1,6 @@
 /**
- * Below are the colors that are used in the app. The colors are defined in the light and dark mode.
- * There are many other ways to style your app. For example, [Nativewind](https://www.nativewind.dev/), [Tamagui](https://tamagui.dev/), [unistyles](https://reactnativeunistyles.vercel.app), etc.
+ * Theme colors for the wallet app.
+ * These colors are used throughout the app for consistent theming.
  */
 
 const tintColorLight = '#0a7ea4';
@@ -31,6 +31,9 @@ export const Colors = {
     placeholder: '#999',
     success: '#4CAF50',
     error: '#f44336',
+    textSecondary: '#666',
+    errorBackground: '#ffebee',
+    primary: '#2196F3',
   },
   dark: {
     text: '#ECEDEE',
@@ -56,5 +59,8 @@ export const Colors = {
     placeholder: '#666',
     success: '#4CAF50',
     error: '#f44336',
+    textSecondary: '#999',
+    errorBackground: '#2d1b1b',
+    primary: '#4FC3F7',
   },
-};
+}; 

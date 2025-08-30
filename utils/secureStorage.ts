@@ -3,8 +3,8 @@ import * as Crypto from 'expo-crypto';
 import * as Device from 'expo-device';
 import * as SecureStore from 'expo-secure-store';
 
-import SecureWallet from './nativeSecureWallet';
 import { ethers } from 'ethers';
+import SecureWallet from './nativeSecureWallet';
 
 // Define the type for storage options
 type SecureStorageOptions = {
