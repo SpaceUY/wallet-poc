@@ -1,22 +1,7 @@
+import { AppSecurityConfig, PINConfig } from '@/types/services';
 import * as SecureStore from 'expo-secure-store';
-
 import { AppState, AppStateStatus } from 'react-native';
-
-export interface AppSecurityConfig {
-  requireAuthentication: boolean;
-  useBiometric: boolean;
-  usePIN: boolean;
-  autoLockTimeout: number; // in milliseconds
-  maxPINAttempts: number;
-  lockoutDuration: number; // in milliseconds
-}
-
-export interface PINConfig {
-  pin: string;
-  salt: string;
-  iterations: number;
-}
-
+// TODO: Audit properly and remove console logs when ready
 export class AppSecurityService {
   private static instance: AppSecurityService;
   private config: AppSecurityConfig;
@@ -28,9 +13,9 @@ export class AppSecurityService {
 
   private constructor() {
     this.config = {
-      requireAuthentication: false, // Disabled by default
-      useBiometric: false, // Disabled by default
-      usePIN: false, // Disabled by default
+      requireAuthentication: false, // Start with auth disabled until configured
+      useBiometric: false, // Start with biometric disabled until verified
+      usePIN: false, // Start with PIN disabled until configured
       autoLockTimeout: 5 * 60 * 1000, // 5 minutes
       maxPINAttempts: 5,
       lockoutDuration: 15 * 60 * 1000, // 15 minutes
@@ -49,47 +34,112 @@ export class AppSecurityService {
     this.appStateListener = AppState.addEventListener('change', this.handleAppStateChange.bind(this));
   }
 
-  private handleAppStateChange(nextAppState: AppStateStatus) {
-    if (nextAppState === 'active') {
-      this.lastActiveTime = Date.now();
-    } else if (nextAppState === 'background' || nextAppState === 'inactive') {
-      // App going to background - will check timeout on next active
+  private async handleAppStateChange(nextAppState: AppStateStatus) {
+    try {
+      if (nextAppState === 'active') {
+        this.lastActiveTime = Date.now();
+        
+        const shouldBeLocked = await this.isAppLocked();
+        if (shouldBeLocked) {
+          this.isLocked = true;
+        }
+        
+        console.log('App became active:', { 
+          isLocked: this.isLocked, 
+          lastActiveTime: this.lastActiveTime 
+        });
+      } else if (nextAppState === 'background' || nextAppState === 'inactive') {
+        // Always lock when going to background if security is enabled
+        if (this.config.requireAuthentication) {
+          this.isLocked = true;
+          console.log('App going to background - locked');
+        }
+      }
+    } catch (error) {
+      console.error('Error in app state change:', error);
+      // On error, lock for safety
+      this.isLocked = true;
     }
   }
 
   async initialize(): Promise<void> {
     try {
+      // Start with app locked
+      this.isLocked = true;
+
       // Load saved configuration
       const savedConfig = await this.getStoredConfig();
       if (savedConfig) {
         this.config = { ...this.config, ...savedConfig };
+      } else {
+        // If no config exists, save the default config
+        await this.saveConfig();
       }
 
-      // Check if PIN is configured but usePIN is false (fix for existing setups)
+      // Check if PIN is configured
       const pinConfigured = await this.getStoredPINConfig() !== null;
-      if (pinConfigured && !this.config.usePIN) {
+      
+      // If PIN is configured, ensure it's enabled
+      if (pinConfigured) {
         this.config.usePIN = true;
         await this.saveConfig();
       }
 
-      // Check if app should be locked
-      await this.checkAutoLock();
+      // Check biometric availability
+      const biometricAvailable = await SecureStore.canUseBiometricAuthentication();
+      if (biometricAvailable) {
+        this.config.useBiometric = true;
+        await this.saveConfig();
+      }
+
+      // Ensure we're locked if authentication is required
+      if (this.config.requireAuthentication && (pinConfigured || biometricAvailable)) {
+        this.isLocked = true;
+      }
+
+      console.log('App security initialized:', {
+        isLocked: this.isLocked,
+        config: this.config,
+        pinConfigured,
+        biometricAvailable
+      });
     } catch (error) {
       console.error('Error initializing app security:', error);
+      // On error, keep app locked for safety
+      this.isLocked = true;
     }
   }
 
   async isAppLocked(): Promise<boolean> {
-    // Check if we're in lockout period
-    if (Date.now() < this.lockoutUntil) {
-      return true;
-    }
+    try {
+      // Check if any security method is enabled and configured
+      const pinConfigured = await this.getStoredPINConfig() !== null;
+      const biometricAvailable = await SecureStore.canUseBiometricAuthentication();
+      
+      const hasActiveSecurity = (this.config.useBiometric && biometricAvailable) || 
+                              (this.config.usePIN && pinConfigured);
+      
+      // If no security is configured, app should never be locked
+      if (!hasActiveSecurity) {
+        this.isLocked = false;
+        return false;
+      }
 
-    // Check if security is enabled
-    const securityEnabled = this.config.useBiometric || this.config.usePIN;
-    if (!securityEnabled) {
-      return false; // No security enabled, never locked
-    }
+      // Now check the current lock state
+      if (this.isLocked) {
+        return true;
+      }
+
+      // Check if we're in lockout period
+      if (Date.now() < this.lockoutUntil) {
+        this.isLocked = true;
+        return true;
+      }
+
+      // If authentication is not required, app is never locked
+      if (!this.config.requireAuthentication) {
+        return false;
+      }
 
     // If PIN is enabled, check if it's actually configured
     if (this.config.usePIN) {
@@ -111,6 +161,10 @@ export class AppSecurityService {
     }
 
     return this.isLocked;
+    } catch (error) {
+      console.error('Error checking app lock state:', error);
+      return true; // Default to locked on error
+    }
   }
 
   async checkAutoLock(): Promise<void> {
@@ -159,7 +213,10 @@ export class AppSecurityService {
 
   async unlockWithPIN(pin: string): Promise<boolean> {
     try {
+      console.log('Attempting to unlock with PIN:', { pin, pinLength: pin.length });
+      
       if (!this.config.usePIN) {
+        console.log('PIN authentication not enabled');
         return false;
       }
 
@@ -170,18 +227,36 @@ export class AppSecurityService {
       }
 
       const storedPINConfig = await this.getStoredPINConfig();
+      console.log('Retrieved stored PIN config:', { 
+        hasConfig: !!storedPINConfig,
+        salt: storedPINConfig?.salt 
+      });
+      
       if (!storedPINConfig) {
+        console.log('No PIN configuration found');
         throw new Error('No PIN configured');
       }
 
-      const isValid = await this.verifyPIN(pin, storedPINConfig);
+      // Ensure we're working with a fresh PIN value
+      const pinToVerify = pin.slice(0);
+      console.log('Verifying PIN:', { pinToVerify });
+      
+      const isValid = await this.verifyPIN(pinToVerify, storedPINConfig);
+      console.log('PIN verification completed:', { isValid, pinToVerify });
       
       if (isValid) {
         this.pinAttempts = 0;
-        this.unlockApp();
+        this.isLocked = false; // Explicitly unlock
+        this.lastActiveTime = Date.now();
+        console.log('App unlocked successfully');
         return true;
       } else {
         this.pinAttempts++;
+        console.log('Failed PIN attempt:', { 
+          attempts: this.pinAttempts, 
+          max: this.config.maxPINAttempts,
+          inputPin: pinToVerify 
+        });
         
         if (this.pinAttempts >= this.config.maxPINAttempts) {
           this.lockoutUntil = Date.now() + this.config.lockoutDuration;
@@ -199,17 +274,22 @@ export class AppSecurityService {
 
   async setupPIN(pin: string): Promise<void> {
     try {
-      if (pin.length < 4) {
-        throw new Error('PIN must be at least 4 digits');
+      console.log('Setting up new PIN...');
+      
+      if (pin.length !== 4) {
+        throw new Error('PIN must be exactly 4 digits');
       }
 
-      if (pin.length > 8) {
-        throw new Error('PIN must be no more than 8 digits');
+      if (!/^\d{4}$/.test(pin)) {
+        throw new Error('PIN must contain only digits');
       }
 
       // Generate salt and hash PIN
       const salt = await this.generateSalt();
+      console.log('Generated new salt');
+      
       const hashedPIN = await this.hashPIN(pin, salt);
+      console.log('Generated PIN hash');
 
       const pinConfig: PINConfig = {
         pin: hashedPIN,
@@ -218,8 +298,20 @@ export class AppSecurityService {
       };
 
       await this.storePINConfig(pinConfig);
+      console.log('Stored PIN configuration');
+      
       this.config.usePIN = true;
       await this.saveConfig();
+      console.log('Updated security config');
+
+      // Verify the PIN was stored correctly
+      const storedConfig = await this.getStoredPINConfig();
+      const canVerify = await this.verifyPIN(pin, storedConfig!);
+      console.log('Verified new PIN setup:', { canVerify });
+      
+      if (!canVerify) {
+        throw new Error('PIN verification failed after setup');
+      }
     } catch (error) {
       console.error('Error setting up PIN:', error);
       throw error;
@@ -296,12 +388,36 @@ export class AppSecurityService {
     return this.config.usePIN && pinConfigured;
   }
 
-  // Method to reset security state (for testing)
+  // TODO: REMOVE! Method to reset security state (for testing)
   async resetSecurityState(): Promise<void> {
-    this.isLocked = false;
-    this.lastActiveTime = Date.now();
-    this.pinAttempts = 0;
-    this.lockoutUntil = 0;
+    try {
+      console.log('Resetting security state...');
+      
+      // Reset all security flags
+      this.isLocked = false;
+      this.lastActiveTime = Date.now();
+      this.pinAttempts = 0;
+      this.lockoutUntil = 0;
+
+      // Remove PIN configuration
+      await SecureStore.deleteItemAsync('app_security_pin_config');
+      
+      // Reset config to defaults
+      this.config = {
+        requireAuthentication: false,
+        useBiometric: false,
+        usePIN: false,
+        autoLockTimeout: 5 * 60 * 1000,
+        maxPINAttempts: 5,
+        lockoutDuration: 15 * 60 * 1000,
+      };
+      await this.saveConfig();
+
+      console.log('Security state reset successfully');
+    } catch (error) {
+      console.error('Error resetting security state:', error);
+      throw error;
+    }
   }
 
   private unlockApp(): void {
@@ -312,26 +428,59 @@ export class AppSecurityService {
   }
 
   private async generateSalt(): Promise<string> {
-    const array = new Uint8Array(16);
-    crypto.getRandomValues(array);
-    return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
+    // Simple salt generation for React Native
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let salt = '';
+    for (let i = 0; i < 16; i++) {
+      salt += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return salt;
   }
 
   private async hashPIN(pin: string, salt: string): Promise<string> {
-    // Simple hash for now - in production you'd want a proper crypto library
+    // Super simple hash for testing - in production use a proper crypto library
     const combined = pin + salt;
     let hash = 0;
+    
     for (let i = 0; i < combined.length; i++) {
-      const char = combined.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash; // Convert to 32-bit integer
+      hash = ((hash << 5) + hash) + combined.charCodeAt(i);
+      hash = hash >>> 0; // Convert to unsigned 32-bit
     }
-    return Math.abs(hash).toString(16);
+    
+    return hash.toString(16);
   }
 
   private async verifyPIN(pin: string, pinConfig: PINConfig): Promise<boolean> {
-    const hashedInput = await this.hashPIN(pin, pinConfig.salt);
-    return hashedInput === pinConfig.pin;
+    try {
+      console.log('Verifying PIN...', {
+        inputPin: pin,
+        salt: pinConfig.salt
+      });
+      const hashedInput = await this.hashPIN(pin, pinConfig.salt);
+      const isValid = hashedInput === pinConfig.pin;
+      console.log('PIN verification details:', {
+        hashedInput,
+        storedHash: pinConfig.pin,
+        isValid
+      });
+      return isValid;
+    } catch (error) {
+      console.error('Error verifying PIN:', error);
+      return false;
+    }
+  }
+
+  // Method to reset PIN configuration (for debugging)
+  async resetPINConfiguration(): Promise<void> {
+    try {
+      await SecureStore.deleteItemAsync('app_security_pin_config');
+      this.config.usePIN = false;
+      await this.saveConfig();
+      console.log('PIN configuration reset successfully');
+    } catch (error) {
+      console.error('Error resetting PIN configuration:', error);
+      throw error;
+    }
   }
 
   private async storePINConfig(pinConfig: PINConfig): Promise<void> {
@@ -348,7 +497,7 @@ export class AppSecurityService {
         keychainAccessible: SecureStore.WHEN_UNLOCKED,
       });
       return stored ? JSON.parse(stored) : null;
-    } catch (error) {
+    } catch { 
       return null;
     }
   }
@@ -367,7 +516,7 @@ export class AppSecurityService {
         keychainAccessible: SecureStore.WHEN_UNLOCKED,
       });
       return stored ? JSON.parse(stored) : null;
-    } catch (error) {
+    } catch {
       return null;
     }
   }

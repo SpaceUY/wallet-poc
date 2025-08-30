@@ -1,13 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import {
-    Alert,
-    Dimensions,
-    KeyboardAvoidingView,
-    Platform,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  View
 } from 'react-native';
 
 import { createTheme } from '@/constants/theme';
@@ -22,8 +21,6 @@ interface AppLockScreenProps {
   onUnlock: () => void;
 }
 
-const { width } = Dimensions.get('window');
-
 export default function AppLockScreen({ onUnlock }: AppLockScreenProps) {
   const insets = useSafeAreaInsets();
   const colorScheme = useColorScheme();
@@ -33,7 +30,16 @@ export default function AppLockScreen({ onUnlock }: AppLockScreenProps) {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [securityStatus, setSecurityStatus] = useState<any>(null);
-  const [showPIN, setShowPIN] = useState(false);
+  
+  // Use ref to track current PIN value without state update delays
+  const currentPinRef = React.useRef('');
+
+  const inputRefs = [
+    React.useRef<TextInput>(null),
+    React.useRef<TextInput>(null),
+    React.useRef<TextInput>(null),
+    React.useRef<TextInput>(null),
+  ];
 
   useEffect(() => {
     loadSecurityStatus();
@@ -72,7 +78,8 @@ export default function AppLockScreen({ onUnlock }: AppLockScreenProps) {
   };
 
   const handlePINUnlock = async () => {
-    if (!pin || pin.length < 4) {
+    const currentPin = currentPinRef.current;
+    if (!currentPin || currentPin.length < 4) {
       setError('Please enter a valid PIN');
       return;
     }
@@ -81,36 +88,69 @@ export default function AppLockScreen({ onUnlock }: AppLockScreenProps) {
     setError('');
 
     try {
-      const success = await appSecurityService.unlockWithPIN(pin);
+      const success = await appSecurityService.unlockWithPIN(currentPin);
       if (success) {
         onUnlock();
       }
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Authentication failed');
       setPin('');
+      currentPinRef.current = '';
     } finally {
       setIsLoading(false);
     }
   };
 
-  const addPinDigit = (digit: string) => {
-    if (pin.length < 8) {
-      const newPin = pin + digit;
+  const handlePinChange = (text: string, index: number) => {
+    if (text.length <= 1 && /^\d*$/.test(text)) {
+      // Update PIN at the specified index
+      let newPin = '';
+      for (let i = 0; i < 4; i++) {
+        if (i === index) {
+          newPin += text;
+        } else {
+          newPin += currentPinRef.current[i] || '';
+        }
+      }
+
+      // Update both ref and state
+      currentPinRef.current = newPin;
       setPin(newPin);
       setError('');
 
-      // Auto-submit when PIN is complete
-      if (newPin.length >= 4) {
-        setTimeout(() => {
-          handlePINUnlock();
-        }, 100);
+      // Handle auto-focus and submit
+      if (text) {
+        if (index < 3) {
+          inputRefs[index + 1].current?.focus();
+        } else if (index === 3) {
+          setTimeout(() => {
+            if (currentPinRef.current.length === 4) {
+              handlePINUnlock();
+            }
+          }, 50);
+        }
       }
     }
   };
 
-  const removePinDigit = () => {
-    setPin(pin.slice(0, -1));
-    setError('');
+  const handleSubmitPin = () => {
+    if (currentPinRef.current.length === 4) {
+      handlePINUnlock();
+    } else {
+      setError('Please enter a 4-digit PIN');
+    }
+  };
+
+  // TODO: Remove this method DEBUG ONLY
+  const handleResetSecurity = async () => {
+    try {
+      await appSecurityService.resetSecurityState();
+      onUnlock();
+      Alert.alert('Success', 'Security state has been reset.');
+    } catch (error) {
+      console.error('Error resetting security:', error);
+      Alert.alert('Error', 'Failed to reset security state.');
+    }
   };
 
   const formatLockoutTime = (milliseconds: number) => {
@@ -121,7 +161,7 @@ export default function AppLockScreen({ onUnlock }: AppLockScreenProps) {
   if (!securityStatus) {
     return (
       <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
-        <Text style={[styles.loadingText, { color: theme.colors.text }]}>Loading...</Text>
+        <ThemedText style={styles.loadingText}>Loading...</ThemedText>
       </ThemedView>
     );
   }
@@ -132,7 +172,6 @@ export default function AppLockScreen({ onUnlock }: AppLockScreenProps) {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <ThemedView style={styles.content}>
-        {/* Header */}
         <View style={styles.header}>
           <Ionicons 
             name="lock-closed" 
@@ -165,27 +204,50 @@ export default function AppLockScreen({ onUnlock }: AppLockScreenProps) {
           </View>
         )}
 
-        {/* PIN Display */}
+        {/* PIN Input Fields */}
         <View style={styles.pinContainer}>
-          <View style={styles.pinDots}>
-            {[0, 1, 2, 3, 4, 5, 6, 7].map((index) => (
-              <View
+          <View style={styles.pinInputRow}>
+            {[0, 1, 2, 3].map((index) => (
+              <TextInput
                 key={index}
+                ref={inputRefs[index]}
                 style={[
-                  styles.pinDot,
+                  styles.pinInput,
                   {
-                    backgroundColor: index < pin.length ? theme.colors.primary : theme.colors.border,
-                    borderColor: theme.colors.border,
+                    backgroundColor: theme.colors.inputBackground,
+                    borderColor: pin.length === index ? theme.colors.primary : theme.colors.border,
                   },
                 ]}
+                value={pin[index] || ''}
+                onChangeText={(text) => handlePinChange(text, index)}
+                keyboardType="number-pad"
+                maxLength={1}
+                secureTextEntry
+                autoFocus={index === 0}
+                clearTextOnFocus
+                selectTextOnFocus
+                editable={!isLoading && securityStatus.lockoutRemaining === 0}
               />
             ))}
           </View>
+          <TouchableOpacity
+            style={[
+              styles.submitButton,
+              {
+                backgroundColor: theme.colors.buttonPrimary,
+                opacity: isLoading || securityStatus.lockoutRemaining > 0 ? 0.6 : 1,
+              },
+            ]}
+            onPress={handleSubmitPin}
+            disabled={isLoading || securityStatus.lockoutRemaining > 0}
+          >
+            <Ionicons name="enter-outline" size={24} color="white" />
+            <ThemedText style={styles.submitButtonText}>Enter</ThemedText>
+          </TouchableOpacity>
         </View>
 
         {/* Authentication Options */}
         <View style={styles.authOptions}>
-          {/* Biometric Button */}
           {securityStatus.biometricAvailable && securityStatus.useBiometric && (
             <TouchableOpacity
               style={[
@@ -208,87 +270,8 @@ export default function AppLockScreen({ onUnlock }: AppLockScreenProps) {
               </ThemedText>
             </TouchableOpacity>
           )}
-
-          {/* PIN Toggle */}
-          {securityStatus.pinConfigured && securityStatus.usePIN && (
-            <TouchableOpacity
-              style={[
-                styles.pinToggleButton,
-                {
-                  backgroundColor: showPIN ? theme.colors.buttonSecondary : theme.colors.buttonPrimary,
-                  opacity: isLoading ? 0.6 : 1,
-                },
-              ]}
-              onPress={() => setShowPIN(!showPIN)}
-              disabled={isLoading || securityStatus.lockoutRemaining > 0}
-            >
-              <Ionicons 
-                name={showPIN ? 'keypad' : 'keypad'} 
-                size={24} 
-                color="white" 
-              />
-              <ThemedText style={styles.pinToggleText}>
-                {showPIN ? 'Hide PIN' : 'Enter PIN'}
-              </ThemedText>
-            </TouchableOpacity>
-          )}
         </View>
 
-        {/* PIN Keypad */}
-        {showPIN && securityStatus.pinConfigured && securityStatus.usePIN && (
-          <View style={styles.keypadContainer}>
-            <View style={styles.keypad}>
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((digit) => (
-                <TouchableOpacity
-                  key={digit}
-                  style={[
-                    styles.keypadButton,
-                    {
-                      backgroundColor: theme.colors.buttonSecondary,
-                      opacity: isLoading || securityStatus.lockoutRemaining > 0 ? 0.6 : 1,
-                    },
-                  ]}
-                  onPress={() => addPinDigit(digit.toString())}
-                  disabled={isLoading || securityStatus.lockoutRemaining > 0}
-                >
-                  <ThemedText style={[styles.keypadText, { color: 'white' }]}>
-                    {digit}
-                  </ThemedText>
-                </TouchableOpacity>
-              ))}
-              
-              <TouchableOpacity
-                style={[
-                  styles.keypadButton,
-                  {
-                    backgroundColor: theme.colors.buttonSecondary,
-                    opacity: isLoading || securityStatus.lockoutRemaining > 0 ? 0.6 : 1,
-                  },
-                ]}
-                onPress={() => addPinDigit('0')}
-                disabled={isLoading || securityStatus.lockoutRemaining > 0}
-              >
-                <ThemedText style={[styles.keypadText, { color: 'white' }]}>0</ThemedText>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.keypadButton,
-                  {
-                    backgroundColor: theme.colors.buttonDanger,
-                    opacity: isLoading || securityStatus.lockoutRemaining > 0 ? 0.6 : 1,
-                  },
-                ]}
-                onPress={removePinDigit}
-                disabled={isLoading || securityStatus.lockoutRemaining > 0}
-              >
-                <Ionicons name="backspace-outline" size={24} color="white" />
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
-
-        {/* Security Info */}
         <View style={styles.securityInfo}>
           <ThemedText style={[styles.securityText, { color: theme.colors.textSecondary }]}>
             Auto-lock: {Math.ceil(securityStatus.autoLockTimeout / 1000 / 60)} minutes
@@ -298,6 +281,23 @@ export default function AppLockScreen({ onUnlock }: AppLockScreenProps) {
               Attempts remaining: {securityStatus.attemptsRemaining}
             </ThemedText>
           )}
+          
+        {/* TODO: Remove this button DEBUG ONLY*/}
+          <TouchableOpacity
+            style={[styles.resetButton, { backgroundColor: theme.colors.buttonDanger }]}
+            onPress={() => {
+              Alert.alert(
+                'Reset Security',
+                'This will reset all security settings. Are you sure?',
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Reset', style: 'destructive', onPress: handleResetSecurity }
+                ]
+              );
+            }}
+          >
+            <ThemedText style={styles.resetButtonText}>Reset Security (Debug)</ThemedText>
+          </TouchableOpacity>
         </View>
       </ThemedView>
     </KeyboardAvoidingView>
@@ -355,17 +355,35 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   pinContainer: {
-    marginBottom: 30,
+    marginVertical: 30,
+    alignItems: 'center',
   },
-  pinDots: {
+  pinInputRow: {
     flexDirection: 'row',
-    gap: 12,
+    gap: 10,
   },
-  pinDot: {
-    width: 16,
-    height: 16,
+  pinInput: {
+    width: 50,
+    height: 50,
     borderRadius: 8,
     borderWidth: 2,
+    fontSize: 24,
+    textAlign: 'center',
+  },
+  submitButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 8,
+    marginTop: 20,
+    gap: 8,
+  },
+  submitButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
   },
   authOptions: {
     flexDirection: 'row',
@@ -384,39 +402,6 @@ const styles = StyleSheet.create({
     color: 'white',
     fontWeight: '600',
   },
-  pinToggleButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 8,
-    gap: 8,
-  },
-  pinToggleText: {
-    color: 'white',
-    fontWeight: '600',
-  },
-  keypadContainer: {
-    marginBottom: 30,
-  },
-  keypad: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    gap: 12,
-    maxWidth: width * 0.8,
-  },
-  keypadButton: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  keypadText: {
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
   securityInfo: {
     alignItems: 'center',
   },
@@ -428,4 +413,15 @@ const styles = StyleSheet.create({
     fontSize: 16,
     textAlign: 'center',
   },
-}); 
+  resetButton: {
+    marginTop: 20,
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  resetButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+});

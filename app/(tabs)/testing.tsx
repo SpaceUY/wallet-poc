@@ -6,7 +6,7 @@ import { ThemedView as View } from '@/components/ThemedView';
 import { createTheme } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { appSecurityService } from '@/services/AppSecurityService';
-import { walletService } from '@/services/WalletService';
+import { walletOrchestrator } from '@/services/WalletOrchestrator';
 import { secureStorage } from '@/utils/secureStorage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -21,7 +21,7 @@ export default function TestingScreen() {
   const testCheckExistingWallet = async () => {
     try {
       setStatus('Checking for existing wallet...');
-      const wallet = await walletService.checkExistingWallet();
+      const wallet = await walletOrchestrator.checkExistingWallet();
       if (wallet) {
         setStatus(`Found wallet: ${wallet.address}`);
         Alert.alert('Wallet Found', `Address: ${wallet.address}\nType: ${wallet.type}`);
@@ -39,7 +39,7 @@ export default function TestingScreen() {
   const testGetActualSigningAddress = async () => {
     try {
       setStatus('Getting actual signing address...');
-      const address = await walletService.getActualSigningAddress();
+      const address = await walletOrchestrator.getActualSigningAddress();
       if (address) {
         setStatus(`Actual signing address: ${address}`);
         Alert.alert('Signing Address', `Address: ${address}`);
@@ -68,7 +68,7 @@ export default function TestingScreen() {
       setStatus(`Wallet retrieved: ${retrievedWallet?.address}`);
       
       // Test balance
-      const balance = await softwareWalletService.getBalance(wallet.address, '11155111');
+      const balance = await walletOrchestrator.getBalance(wallet.address);
       setStatus(`Balance: ${balance} ETH`);
       
       // Clean up
@@ -129,28 +129,6 @@ export default function TestingScreen() {
     }
   };
 
-  const testDebugWalletCreation = async () => {
-    try {
-      setStatus('Running wallet creation debug...');
-      const debugInfo = await walletService.debugWalletCreation();
-      setStatus('Debug completed');
-      
-      Alert.alert('Debug Info', 
-        `Secure Enclave: ${debugInfo.secureEnclaveAvailable ? '✅' : '❌'}\n` +
-        `Secure Storage: ${debugInfo.secureStorageAvailable ? '✅' : '❌'}\n` +
-        `Existing Wallet: ${debugInfo.existingWallet ? '✅' : '❌'}\n` +
-        `Test Creation: ${debugInfo.testWalletCreation?.success ? '✅' : '❌'}\n\n` +
-        `Details:\n` +
-        `- Existing: ${debugInfo.existingWallet?.address || 'None'}\n` +
-        `- Test Error: ${debugInfo.testWalletCreation?.error || 'None'}`
-      );
-    } catch (error) {
-      console.error('Error in debug:', error);
-      setStatus(`Debug error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      Alert.alert('Debug Error', `Failed to run debug: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  };
-
   const testSecureStorage = async () => {
     try {
       setStatus('Testing secure storage...');
@@ -180,7 +158,7 @@ export default function TestingScreen() {
             style: 'destructive',
             onPress: async () => {
               setStatus('Deleting wallet...');
-              await walletService.deleteWallet();
+              await walletOrchestrator.deleteWallet();
               setStatus('Wallet deleted successfully');
               Alert.alert('Success', 'Wallet deleted successfully');
             }
@@ -319,14 +297,6 @@ export default function TestingScreen() {
               activeOpacity={0.7}
             >
               <Text style={styles.buttonText}>Test Software Wallet Service</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={[styles.button, { backgroundColor: theme.colors.buttonSecondary }]} 
-              onPress={testDebugWalletCreation}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.buttonText}>Debug Wallet Creation</Text>
             </TouchableOpacity>
 
             <TouchableOpacity 

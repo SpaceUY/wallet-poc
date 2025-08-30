@@ -1,28 +1,10 @@
-import * as Crypto from 'expo-crypto';
-
+import { SoftwareWalletInfo, WalletCreationResult } from '@/types/wallet';
 import { ethers } from 'ethers';
-import { ENV } from '../config/env';
+import * as Crypto from 'expo-crypto';
 import { secureStorage } from '../utils/secureStorage';
-
-export interface WalletConnectSession {
-  topic: string;
-  chainId: string;
-  accounts: string[];
-}
-
-export interface WalletConnectTransaction {
-  to: string;
-  value: string;
-  data?: string;
-  gasLimit?: string;
-  gasPrice?: string;
-}
 
 export class SoftwareWalletService {
   private static instance: SoftwareWalletService;
-  private signClient: any = null;
-  private projectId = ENV.WALLETCONNECT_PROJECT_ID;
-  private isInitialized = false;
 
   private constructor() {}
 
@@ -33,29 +15,9 @@ export class SoftwareWalletService {
     return SoftwareWalletService.instance;
   }
 
-  async initialize(): Promise<void> {
-    if (this.isInitialized) return;
-
+  async createWallet(): Promise<WalletCreationResult & { type: 'software'; mnemonic: string }> {
     try {
-      // Verify device security before initializing WalletConnect
-      const { isSecure } = await secureStorage.verifyDeviceSecurity();
-      if (!isSecure) {
-        throw new Error('Device security requirements not met');
-      }
-
-      // For now, we'll use a simplified WalletConnect implementation
-      // that works with Expo Go without AsyncStorage
-      console.log('WalletConnect service initialized (Expo Go compatible mode)');
-      this.isInitialized = true;
-    } catch (error) {
-      console.error('Failed to initialize WalletConnect:', error);
-      throw new Error('Failed to initialize WalletConnect service');
-    }
-  }
-
-  async createWallet(): Promise<{ address: string; type: 'software'; mnemonic: string }> {
-    try {
-      await this.initialize();
+      console.log('Creating software wallet...');
 
       // Use expo-crypto for secure random generation
       const entropy = await Crypto.getRandomBytesAsync(32);
@@ -71,6 +33,8 @@ export class SoftwareWalletService {
 
       // Store the wallet info securely
       await this.storeWalletInfo(wallet.address, wallet.privateKey, mnemonic);
+
+      console.log('Software wallet created successfully:', wallet.address);
 
       return { 
         address: wallet.address, 
@@ -112,13 +76,15 @@ export class SoftwareWalletService {
 
   async recoverFromMnemonic(mnemonic: string): Promise<{ address: string; type: 'software' }> {
     try {
-      await this.initialize();
+      console.log('Recovering wallet from mnemonic...');
 
       // Create wallet from mnemonic
       const wallet = ethers.Wallet.fromPhrase(mnemonic);
       
       // Store the wallet info securely
       await this.storeWalletInfo(wallet.address, wallet.privateKey, mnemonic);
+
+      console.log('Wallet recovered successfully:', wallet.address);
 
       return { 
         address: wallet.address, 
@@ -130,15 +96,8 @@ export class SoftwareWalletService {
     }
   }
 
-  async sendTransaction(
-    chainId: string, 
-    transaction: WalletConnectTransaction
-  ): Promise<{ hash: string }> {
+  async signTransaction(to: string, value: string, data?: string): Promise<string> {
     try {
-      await this.initialize();
-
-      // For now, we'll use ethers.js for transaction signing
-      // In a full implementation, you'd use WalletConnect's signing
       const walletInfo = await this.getStoredWalletInfo();
       if (!walletInfo) {
         throw new Error('No wallet found');
@@ -146,103 +105,74 @@ export class SoftwareWalletService {
 
       const wallet = new ethers.Wallet(walletInfo.privateKey);
       
-      // Create transaction
+      // Create transaction object
       const tx = {
-        to: transaction.to,
-        value: ethers.parseEther(transaction.value),
-        data: transaction.data || '0x',
-        gasLimit: transaction.gasLimit ? BigInt(transaction.gasLimit) : undefined,
-        gasPrice: transaction.gasPrice ? BigInt(transaction.gasPrice) : undefined
+        to: to,
+        value: ethers.parseEther(value),
+        data: data || '0x'
       };
 
-      // Sign and send transaction
+      // Sign transaction
       const signedTx = await wallet.signTransaction(tx);
       
-      // For now, return a mock hash
-      // In full implementation, you'd broadcast the transaction
-      return { hash: '0x' + '0'.repeat(64) };
+      return signedTx;
     } catch (error) {
-      console.error('Failed to send WalletConnect transaction:', error);
-      throw new Error('Failed to send transaction');
+      console.error('Failed to sign transaction:', error);
+      throw new Error('Failed to sign transaction');
     }
   }
 
-  async getBalance(address: string, chainId: string): Promise<string> {
+  async signMessage(message: string): Promise<string> {
     try {
-      // For now, we'll use ethers.js for balance checking
-      // In a full implementation, you'd use WalletConnect's RPC calls
-      const provider = new ethers.JsonRpcProvider(
-        `https://${chainId === '1' ? 'mainnet' : 'sepolia'}.infura.io/v3/YOUR_INFURA_ID`
-      );
+      const walletInfo = await this.getStoredWalletInfo();
+      if (!walletInfo) {
+        throw new Error('No wallet found');
+      }
+
+      const wallet = new ethers.Wallet(walletInfo.privateKey);
+      const signature = await wallet.signMessage(message);
       
-      const balance = await provider.getBalance(address);
-      return ethers.formatEther(balance);
+      return signature;
     } catch (error) {
-      console.error('Failed to get balance:', error);
-      throw new Error('Failed to get balance');
+      console.error('Failed to sign message:', error);
+      throw new Error('Failed to sign message');
     }
   }
 
-  async connectToDApp(uri: string): Promise<WalletConnectSession> {
+  async getPublicKey(): Promise<string | null> {
     try {
-      await this.initialize();
-      
-      // In Expo Go, we'll use a mock implementation
-      // In a full build, this would use actual WalletConnect
-      console.log('Connecting to dApp (Expo Go mode):', uri);
-      
-      // Parse the URI to extract connection info
-      const url = new URL(uri);
-      const topic = url.searchParams.get('topic') || 'mock-topic';
-      
-      return {
-        topic: topic,
-        chainId: 'eip155:1', // Default to Ethereum mainnet
-        accounts: ['0x' + '0'.repeat(40)] // Mock account
-      };
-    } catch (error) {
-      console.error('Failed to connect to dApp:', error);
-      throw new Error('Failed to connect to dApp');
-    }
-  }
+      const walletInfo = await this.getStoredWalletInfo();
+      if (!walletInfo) return null;
 
-  async disconnectFromDApp(sessionTopic: string): Promise<void> {
-    try {
-      console.log('Mock dApp disconnection for topic:', sessionTopic);
-      // In full implementation, this would disconnect from actual dApps
+      const wallet = new ethers.Wallet(walletInfo.privateKey);
+      return wallet.address;
     } catch (error) {
-      console.error('Failed to disconnect from dApp:', error);
+      console.error('Failed to get public key:', error);
+      return null;
     }
   }
 
   private async storeWalletInfo(address: string, privateKey: string, mnemonic: string): Promise<void> {
     try {
-      // Store wallet info securely using our existing secure storage
-      await secureStorage.setItem(
-        'software_address',
-        address
-      );
+      // Store wallet info using basic secure storage
+      await secureStorage.setItem('software_address', address);
 
       // Encrypt and store private key
       const encryptedKey = await this.encryptData(privateKey);
-      await secureStorage.setItem(
-        'software_private_key',
-        encryptedKey
-      );
+      await secureStorage.setItem('software_private_key', encryptedKey);
 
       // Encrypt and store mnemonic
       const encryptedMnemonic = await this.encryptData(mnemonic);
-      await secureStorage.setItem(
-        'software_mnemonic',
-        encryptedMnemonic
-      );
+      await secureStorage.setItem('software_mnemonic', encryptedMnemonic);
+
+      console.log('Wallet info stored successfully');
     } catch (error) {
       console.error('Failed to store wallet info:', error);
       throw new Error('Failed to store wallet information');
     }
   }
 
-  private async getStoredWalletInfo(): Promise<{ address: string; privateKey: string; mnemonic?: string } | null> {
+  async getStoredWalletInfo(): Promise<SoftwareWalletInfo | null> {
     try {
       const address = await secureStorage.getItem('software_address');
       const encryptedKey = await secureStorage.getItem('software_private_key');
@@ -258,10 +188,6 @@ export class SoftwareWalletService {
       console.error('Failed to get stored wallet info:', error);
       return null;
     }
-  }
-
-  private isExpoGo(): boolean {
-    return typeof global !== 'undefined' && (global as any).__EXPO_GO__ === true;
   }
 
   private generateSimpleMnemonic(privateKey: string): string {
@@ -287,13 +213,11 @@ export class SoftwareWalletService {
 
   private async encryptData(data: string): Promise<string> {
     // Simple encryption for now - in production, use proper encryption
-    // Use btoa for base64 encoding (works in React Native)
     return btoa(data);
   }
 
   private async decryptData(encryptedData: string): Promise<string> {
     // Simple decryption for now - in production, use proper decryption
-    // Use atob for base64 decoding (works in React Native)
     return atob(encryptedData);
   }
 
@@ -311,4 +235,4 @@ export class SoftwareWalletService {
   }
 }
 
-export const softwareWalletService = SoftwareWalletService.getInstance(); 
+export const softwareWalletService = SoftwareWalletService.getInstance();

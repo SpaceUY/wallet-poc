@@ -1,15 +1,21 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, TextInput, TouchableOpacity, TouchableWithoutFeedback } from 'react-native';
+import { Alert, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleProp, StyleSheet, TextInput, TouchableOpacity, TouchableWithoutFeedback, ViewStyle } from 'react-native';
 import { useAccount, useDisconnect } from "wagmi";
 
 import { ThemedText as Text } from '@/components/ThemedText';
 import { ThemedView as View } from '@/components/ThemedView';
 import { createTheme } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/useColorScheme';
-import { walletService } from '@/services/WalletService';
+import { walletOrchestrator } from '@/services/WalletOrchestrator';
+import { WalletInfo } from '@/types/wallet';
 import Clipboard from '@react-native-clipboard/clipboard';
 import { useAppKit } from "@reown/appkit-wagmi-react-native";
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+interface TxInfo {
+  to: string;
+  amount: string;
+}
 
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
   constructor(props: { children: React.ReactNode }) {
@@ -41,161 +47,175 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 function WalletScreen() {
   const insets = useSafeAreaInsets();
   const { open } = useAppKit();
-  const { address, isConnected, chainId } = useAccount();
+  const { address, isConnected } = useAccount();
   const { disconnect } = useDisconnect();
   
   const colorScheme = useColorScheme();
   const theme = createTheme(colorScheme ?? 'light');
   
+  // State
   const [status, setStatus] = useState('Ready');
-  const [walletInfo, setWalletInfo] = useState<{
-    address?: string;
-    balance?: string;
-    type?: 'hardware' | 'software' | 'external';
-  }>({});
-  const [txInfo, setTxInfo] = useState({
-    to: '',
-    amount: '0.001'
-  });
+  const [walletInfo, setWalletInfo] = useState<WalletInfo>({} as WalletInfo);
+  const [txInfo, setTxInfo] = useState<TxInfo>({ to: '', amount: '0.001' });
   const [isSendModalVisible, setIsSendModalVisible] = useState(false);
   const [isSuccessModalVisible, setIsSuccessModalVisible] = useState(false);
   const [lastTxHash, setLastTxHash] = useState<string | null>(null);
-  const [isConfirming, setIsConfirming] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [isCheckingWallet, setIsCheckingWallet] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
 
-  const testGetBalance = useCallback(async () => {
+  const updateStatus = useCallback((message: string) => {
+    console.log('Status:', message);
+    setStatus(message);
+  }, []);
+
+  const handleError = useCallback((error: unknown, context: string) => {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`${context}:`, error);
+    updateStatus(`${context}: ${message}`);
+    return message;
+  }, [updateStatus]);
+
+  const copyToClipboard = (text: string, successMessage: string) => {
+    Clipboard.setString(text);
+    updateStatus(successMessage);
+  };
+
+  // Wallet Operations
+  const getBalance = useCallback(async () => {
+    if (!walletInfo.address) {
+      updateStatus('No wallet address available');
+      return;
+    }
+    
     try {
-      if (!walletInfo.address) {
-        setStatus('No wallet address available');
-        return;
-      }
-      
-      setStatus('Getting balance...');
-      const balance = await walletService.getBalance(walletInfo.address);
+      setIsLoading(true);
+      updateStatus('Getting balance...');
+      const balance = await walletOrchestrator.getBalance(walletInfo.address);
       setWalletInfo(prev => ({ ...prev, balance }));
-      setStatus('Balance updated!');
+      updateStatus('Balance updated!');
     } catch (error) {
-      console.error('Error getting balance:', error);
-      setStatus(`Error getting balance: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      handleError(error, 'Error getting balance');
+    } finally {
+      setIsLoading(false);
     }
-  }, [walletInfo.address]);
+  }, [handleError, updateStatus, walletInfo.address]);
 
-  // Handle WalletConnect connection state changes
-  useEffect(() => {
-    console.log('Connection state changed:', { isConnected, address, chainId });
-    
-    if (isConnected && address) {
-      console.log('WalletConnect connected with address:', address);
-      setIsConnecting(false);
-      setStatus('WalletConnect connected successfully!');
-      
-      // Update wallet info
-      setWalletInfo({ 
-        address: address, 
-        type: 'external' 
-      });
-      
-      // Get initial balance
-      testGetBalance();
-    } else if (!isConnected) {
-      console.log('WalletConnect disconnected');
-      setIsConnecting(false);
-      // Only clear wallet info if we don't have a local wallet
-      if (walletInfo.type === 'external') {
-        setWalletInfo({});
-        setStatus('WalletConnect disconnected');
-      }
-    }
-  }, [isConnected, address, chainId, testGetBalance, walletInfo.type]);
-
-  useEffect(() => {
-    const checkWallet = async () => {
-      try {
-        console.log('Component: Starting wallet check...');
-        setStatus('Checking for existing wallet...');
-        setIsCheckingWallet(true);
-        
-        // Check if WalletConnect is connected first
-        if (isConnected && address) {
-          console.log('Component: WalletConnect is connected with address:', address);
-          setWalletInfo({ 
-            address: address, 
-            type: 'external' 
-          });
-          setStatus('WalletConnect wallet connected, getting balance...');
-          
-          // Get initial balance
-          console.log('Component: Getting balance for address:', address);
-          const balance = await walletService.getBalance(address);
-          console.log('Component: Got balance:', balance);
-          
-          setWalletInfo(prev => ({ ...prev, balance }));
-          setStatus('WalletConnect wallet restored successfully!');
-          return;
-        }
-        
-        // Use the actual signing address for hardware wallets
-        const actualAddress = await walletService.getActualSigningAddress();
-        console.log('Component: getActualSigningAddress result:', actualAddress);
-        
-        if (actualAddress) {
-          console.log('Component: Found wallet, setting address:', actualAddress);
-          // Check wallet type
-          const existingWallet = await walletService.checkExistingWallet();
-          setWalletInfo({ 
-            address: actualAddress, 
-            type: existingWallet?.type 
-          });
-          setStatus('Found existing wallet, getting balance...');
-          
-          // Get initial balance
-          console.log('Component: Getting balance for address:', actualAddress);
-          const balance = await walletService.getBalance(actualAddress);
-          console.log('Component: Got balance:', balance);
-          
-          setWalletInfo(prev => ({ ...prev, balance }));
-          setStatus('Wallet restored successfully!');
-        } else {
-          console.log('Component: No wallet found');
-          setStatus('No existing wallet found');
-        }
-      } catch (error) {
-        console.error('Component: Error in checkWallet:', error);
-        if (error instanceof Error) {
-          console.error('Component: Error details:', error.message);
-          console.error('Component: Error stack:', error.stack);
-          setStatus(`Error checking wallet: ${error.message}`);
-        } else {
-          setStatus('Error checking for existing wallet');
-        }
-      } finally {
-        setIsCheckingWallet(false);
-      }
-    };
-    
-    checkWallet();
-  }, [isConnected, address]);
-
-
-
-  const testSendTransaction = async () => {
+  const createWallet = async (isSoftware: boolean) => {
     try {
-      if (!walletInfo.address) {
-        Alert.alert('No Wallet', 'Please create or connect a wallet first.');
-        return;
+      setIsLoading(true);
+      updateStatus(`Creating ${isSoftware ? 'software' : 'hardware'} wallet...`);
+      
+      const result = await walletOrchestrator.createWallet(isSoftware);
+      setWalletInfo({ address: result.address, type: result.type });
+      updateStatus(`${isSoftware ? 'Software' : 'Hardware'} wallet created successfully!`);
+      
+      await getBalance();
+      
+      if (isSoftware && result.mnemonic) {
+        Alert.alert(
+          '🔐 Backup Your Wallet',
+          `Your wallet has been created!\n\nMnemonic: ${result.mnemonic}\n\n⚠️ Write this down and keep it safe. You'll need it to recover your wallet.`,
+          [{ text: 'OK' }]
+        );
       }
+    } catch (error) {
+      handleError(error, 'Error creating wallet');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-      if (!txInfo.to || !txInfo.amount) {
-        Alert.alert('Invalid Input', 'Please enter a valid recipient address and amount.');
-        return;
+  const deleteWallet = async () => {
+    Alert.alert(
+      'Delete Wallet',
+      'Are you sure you want to delete your wallet? This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setIsLoading(true);
+              updateStatus('Deleting wallet...');
+              await walletOrchestrator.deleteWallet();
+              setWalletInfo({} as WalletInfo);
+              updateStatus('Wallet deleted successfully');
+            } catch (error) {
+              handleError(error, 'Error deleting wallet');
+            } finally {
+              setIsLoading(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const connectExternalWallet = async () => {
+    try {
+      updateStatus('Opening WalletConnect modal...');
+      setIsConnecting(true);
+      
+      // Set timeout for connection
+      const connectionTimeout = setTimeout(() => {
+        if (isConnecting && !isConnected) {
+          setIsConnecting(false);
+          updateStatus('Connection timed out - please try again');
+        }
+      }, 30000);
+
+      await open();
+      updateStatus('Modal opened - select a wallet to connect');
+      
+      // Clean up on successful connection
+      if (isConnected && address) {
+        clearTimeout(connectionTimeout);
+        setIsConnecting(false);
       }
+      
+    } catch (error) {
+      setIsConnecting(false);
+      const errorMessage = handleError(error, 'Error opening WalletConnect modal');
+      
+      Alert.alert(
+        'Connection Error',
+        `Failed to open wallet connection modal:\n\n${errorMessage}\n\nPlease make sure you have a compatible wallet app installed.`,
+        [{ text: 'OK' }]
+      );
+    }
+  };
 
-      // Estimate gas first
-      setStatus('Estimating gas...');
-      const gasEstimate = await walletService.estimateGas(txInfo.to, txInfo.amount);
+  const disconnectExternalWallet = async () => {
+    try {
+      setIsLoading(true);
+      updateStatus('Disconnecting WalletConnect...');
+      await disconnect();
+      setWalletInfo({} as WalletInfo);
+      updateStatus('WalletConnect disconnected');
+    } catch (error) {
+      handleError(error, 'Error disconnecting WalletConnect');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-      // Show transaction confirmation
+  const sendTransaction = async () => {
+    if (!walletInfo.address) {
+      Alert.alert('No Wallet', 'Please create or connect a wallet first.');
+      return;
+    }
+
+    if (!txInfo.to || !txInfo.amount) {
+      Alert.alert('Invalid Input', 'Please enter a valid recipient address and amount.');
+      return;
+    }
+
+    try {
+      updateStatus('Estimating gas...');
+      const gasEstimate = await walletOrchestrator.estimateGas(txInfo.to, txInfo.amount);
+
       Alert.alert(
         'Confirm Transaction',
         `Send ${txInfo.amount} ETH to:\n${txInfo.to}\n\nEstimated Gas: ${gasEstimate} ETH`,
@@ -210,156 +230,244 @@ function WalletScreen() {
             style: 'destructive',
             onPress: async () => {
               try {
-                setStatus('Sending transaction...');
-                setIsConfirming(true);
-                const tx = await walletService.sendTransaction(
-                  txInfo.to,
-                  txInfo.amount
-                );
+                setIsLoading(true);
+                updateStatus('Sending transaction...');
+                
+                const tx = await walletOrchestrator.sendTransaction(txInfo.to, txInfo.amount);
                 setLastTxHash(tx.hash);
                 setIsSendModalVisible(false);
                 setIsSuccessModalVisible(true);
                 
-                // Wait for transaction confirmation
-                setStatus('Waiting for confirmation...');
-                await tx.wait(1); // Wait for 1 confirmation
-                
-                setStatus('Transaction confirmed!');
-                // Update balance after confirmation
-                await testGetBalance();
+                updateStatus('Waiting for confirmation...');
+                await tx.wait(1);
+                updateStatus('Transaction confirmed!');
+                await getBalance();
               } catch (error) {
-                console.error('Transaction failed:', error);
-                setStatus(`Transaction failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-                Alert.alert(
-                  'Transaction Failed',
-                  'The transaction could not be completed. Please try again.'
-                );
+                handleError(error, 'Transaction failed');
+                Alert.alert('Transaction Failed', 'The transaction could not be completed. Please try again.');
               } finally {
-                setIsConfirming(false);
+                setIsLoading(false);
               }
             }
           }
         ]
       );
     } catch (error) {
-      console.error('Error sending transaction:', error);
-      setStatus(`Error sending transaction: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  };
-
-  const copyAddress = () => {
-    if (walletInfo.address) {
-      Clipboard.setString(walletInfo.address);
-      setStatus('Address copied to clipboard!');
+      handleError(error, 'Error sending transaction');
     }
   };
 
   const viewPrivateKey = async () => {
+    if (walletInfo.type !== 'software') {
+      Alert.alert('Not Available', 'Private key viewing is only available for software wallets.');
+      return;
+    }
+
     try {
-      if (walletInfo.type === 'software') {
-        setStatus('Retrieving private key...');
-        const { softwareWalletService } = await import('@/services/SoftwareWalletService');
-        const walletInfo = await softwareWalletService['getStoredWalletInfo']();
-        
-        if (walletInfo) {
-          Alert.alert(
-            '🔐 Private Key',
-            `Your wallet's private key:\n\n${walletInfo.privateKey}\n\nKeep this safe and never share it!`,
-            [
-              {
-                text: 'Copy to Clipboard',
-                onPress: () => {
-                  Clipboard.setString(walletInfo.privateKey);
-                  setStatus('Private key copied to clipboard!');
-                }
-              },
-              { text: 'Close' }
-            ]
-          );
-        } else {
-          setStatus('Could not retrieve private key');
-        }
+      updateStatus('Retrieving private key...');
+      const { softwareWalletService } = await import('@/services/SoftwareWalletService');
+      const storedWalletInfo = await softwareWalletService['getStoredWalletInfo']();
+      
+      if (storedWalletInfo) {
+        Alert.alert(
+          '🔐 Private Key',
+          `Your wallet's private key:\n\n${storedWalletInfo.privateKey}\n\nKeep this safe and never share it!`,
+          [
+            {
+              text: 'Copy to Clipboard',
+              onPress: () => copyToClipboard(storedWalletInfo.privateKey, 'Private key copied to clipboard!')
+            },
+            { text: 'Close' }
+          ]
+        );
       } else {
-        Alert.alert('Not Available', 'Private key viewing is only available for software wallets.');
+        updateStatus('Could not retrieve private key');
       }
     } catch (error) {
-      console.error('Error viewing private key:', error);
-      setStatus(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      handleError(error, 'Error viewing private key');
     }
   };
 
-  const testDeleteWallet = async () => {
+  const viewSeedPhrase = async () => {
     try {
-      Alert.alert(
-        'Delete Wallet',
-        'Are you sure you want to delete your wallet? This action cannot be undone.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Delete',
-            style: 'destructive',
-            onPress: async () => {
-              setStatus('Deleting wallet...');
-              await walletService.deleteWallet();
-              setWalletInfo({});
-              setStatus('Wallet deleted successfully');
-            }
-          }
-        ]
-      );
+      updateStatus('Retrieving mnemonic...');
+      const { softwareWalletService } = await import('@/services/SoftwareWalletService');
+      const mnemonic = await softwareWalletService.getMnemonic();
+      
+      if (mnemonic) {
+        Alert.alert(
+          '🔐 Seed Phrase',
+          `Your wallet's seed phrase:\n\n${mnemonic}\n\nKeep this safe and never share it!`,
+          [
+            {
+              text: 'Copy to Clipboard',
+              onPress: () => copyToClipboard(mnemonic, 'Seed phrase copied to clipboard!')
+            },
+            { text: 'Close' }
+          ]
+        );
+      } else {
+        updateStatus('No mnemonic found');
+        Alert.alert('No Mnemonic', 'No mnemonic found for this wallet.');
+      }
     } catch (error) {
-      console.error('Error deleting wallet:', error);
-      setStatus(`Error deleting wallet: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      handleError(error, 'Error getting mnemonic');
     }
   };
 
-  const connectExternalWallet = async () => {
-    try {
-      setStatus('Opening WalletConnect modal...');
-      setIsConnecting(true);
-      console.log('Attempting to open WalletConnect modal...');
-      
-      await open();
-      console.log('WalletConnect modal opened successfully');
-      
-      setStatus('Modal opened - select a wallet to connect');
-      console.log('Modal opened, waiting for user selection...');
-      
-      // Add a timeout to reset connecting state if no connection happens
-      setTimeout(() => {
-        if (isConnecting && !isConnected) {
-          console.log('Connection timeout - resetting state');
-          setIsConnecting(false);
-          setStatus('Connection timed out - please try again');
-        }
-      }, 30000); // 30 second timeout
-      
-    } catch (error) {
-      console.error('Error opening WalletConnect modal:', error);
-      setStatus(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  // Effects
+  useEffect(() => {
+    if (isConnected && address) {
       setIsConnecting(false);
+      updateStatus('WalletConnect connected successfully!');
+      setWalletInfo({ address, type: 'external' });
+      // Auto-refresh balance when connected
+      getBalance();
+    } else if (!isConnected && walletInfo.type === 'external') {
+      setIsConnecting(false);
+      setWalletInfo({} as WalletInfo);
+      updateStatus('WalletConnect disconnected');
+    }
+  }, [isConnected, address, getBalance, walletInfo.type, updateStatus]);
+
+  useEffect(() => {
+    if (!isConnected && !isCheckingWallet && isConnecting) {
+      setIsConnecting(false);
+    }
+  }, [isConnected, isCheckingWallet, isConnecting]);
+
+  useEffect(() => {
+    const checkWallet = async () => {
+      try {
+        updateStatus('Checking for existing wallet...');
+        setIsCheckingWallet(true);
+        
+        // Check WalletConnect first
+        if (isConnected && address) {
+          setWalletInfo({ address, type: 'external' });
+          updateStatus('WalletConnect wallet connected, getting balance...');
+          const balance = await walletOrchestrator.getBalance(address);
+          setWalletInfo(prev => ({ ...prev, balance }));
+          updateStatus('WalletConnect wallet restored successfully!');
+          return;
+        }
+        
+        // Check for local wallet
+        const actualAddress = await walletOrchestrator.getActualSigningAddress();
+        if (actualAddress) {
+          const existingWallet = await walletOrchestrator.checkExistingWallet();
+          if (!existingWallet) {
+            updateStatus('No existing wallet found');
+            return;
+          }
+          setWalletInfo({ address: actualAddress, type: existingWallet?.type });
+          updateStatus('Found existing wallet, getting balance...');
+          
+          const balance = await walletOrchestrator.getBalance(actualAddress);
+          setWalletInfo(prev => ({ ...prev, balance }));
+          updateStatus('Wallet restored successfully!');
+        } else {
+          updateStatus('No existing wallet found');
+        }
+      } catch (error) {
+        handleError(error, 'Error checking wallet');
+      } finally {
+        setIsCheckingWallet(false);
+      }
+    };
+    
+    checkWallet();
+  }, [isConnected, address, handleError, updateStatus]);
+
+  const renderWalletInfo = () => (
+    <View style={[styles.card, { backgroundColor: theme.colors.cardBackground, borderColor: theme.colors.border }]}>
+      <InfoRow label="Status" value={status} />
       
-      Alert.alert(
-        'Connection Error',
-        `Failed to open wallet connection modal:\n\n${error instanceof Error ? error.message : 'Unknown error'}\n\nPlease make sure you have a compatible wallet app installed.`,
-        [{ text: 'OK' }]
-      );
-    }
-  };
+      {/* TODO: can be removed in production */}
+      <InfoRow label="WalletConnect Debug" value={`Connected: ${isConnected ? 'Yes' : 'No'}`} />
+      <InfoRow label="" value={`Address: ${address || 'None'}`} />
+      
+      {walletInfo.address && (
+        <>
+          <Text style={styles.label}>Address:</Text>
+          <TouchableOpacity onPress={() => copyToClipboard(walletInfo.address!, 'Address copied to clipboard!')}>
+            <Text style={[styles.value, styles.address]} numberOfLines={1} ellipsizeMode="middle">
+              {walletInfo.address}
+            </Text>
+          </TouchableOpacity>
+          
+          <InfoRow label="Balance" value={`${walletInfo.balance || '0.0'} ETH`} />
+          
+          {walletInfo.type && <InfoRow label="Type" value={walletInfo.type} />}
+        </>
+      )}
+    </View>
+  );
 
-  const disconnectExternalWallet = async () => {
-    try {
-      setStatus('Disconnecting WalletConnect...');
-      await disconnect();
-      setWalletInfo({});
-      setStatus('WalletConnect disconnected');
-    } catch (error) {
-      console.error('Error disconnecting WalletConnect:', error);
-      setStatus(`Error disconnecting: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  };
+  const renderNoWalletButtons = () => (
+    <>
+      <ActionButton
+        title={isCheckingWallet ? 'Checking Wallet...' : 'Create Hardware Wallet'}
+        onPress={() => createWallet(false)}
+        disabled={isCheckingWallet || isLoading}
+        backgroundColor={theme.colors.buttonPrimary}
+      />
+      <ActionButton
+        title={isCheckingWallet ? 'Checking Wallet...' : 'Create Software Wallet'}
+        onPress={() => createWallet(true)}
+        disabled={isCheckingWallet || isLoading}
+        backgroundColor={theme.colors.buttonSuccess}
+      />
+      <ActionButton
+        title={isCheckingWallet ? 'Checking Wallet...' : isConnecting ? 'Connecting...' : 'Connect External Wallet'}
+        onPress={connectExternalWallet}
+        disabled={isCheckingWallet || isConnecting || isLoading}
+        backgroundColor={theme.colors.buttonPrimary}
+      />
+    </>
+  );
 
-
+  const renderWalletButtons = () => (
+    <>
+      <ActionButton
+        title="Refresh Balance"
+        onPress={getBalance}
+        disabled={isLoading}
+        backgroundColor={theme.colors.buttonSecondary}
+      />
+      <ActionButton
+        title="Send Transaction"
+        onPress={() => setIsSendModalVisible(true)}
+        disabled={isLoading}
+        backgroundColor={theme.colors.buttonPrimary}
+      />
+      
+      {walletInfo.type === 'software' && (
+        <>
+          <ActionButton
+            title="View Private Key"
+            onPress={viewPrivateKey}
+            disabled={isLoading}
+            backgroundColor={theme.colors.buttonWarning}
+          />
+          <ActionButton
+            title="View Seed Phrase"
+            onPress={viewSeedPhrase}
+            disabled={isLoading}
+            backgroundColor={theme.colors.buttonWarning}
+          />
+        </>
+      )}
+      
+      <ActionButton
+        title={walletInfo.type === 'external' ? 'Disconnect Wallet' : 'Delete Wallet'}
+        onPress={walletInfo.type === 'external' ? disconnectExternalWallet : deleteWallet}
+        disabled={isLoading}
+        backgroundColor={theme.colors.buttonDanger}
+        style={styles.deleteButton}
+      />
+    </>
+  );
 
   return (
     <ErrorBoundary>
@@ -377,199 +485,10 @@ function WalletScreen() {
             keyboardShouldPersistTaps="handled"
           >
             <View style={styles.content}>
-              <View style={[styles.card, { backgroundColor: theme.colors.cardBackground, borderColor: theme.colors.border }]}>
-                <Text style={styles.label}>Status:</Text>
-                <Text style={styles.value}>{status}</Text>
-                
-                {/* Debug Info */}
-                <Text style={styles.label}>WalletConnect Debug:</Text>
-                <Text style={styles.value}>Connected: {isConnected ? 'Yes' : 'No'}</Text>
-                <Text style={styles.value}>Address: {address || 'None'}</Text>
-                
-                {walletInfo.address && (
-                  <>
-                    <Text style={styles.label}>Address:</Text>
-                    <TouchableOpacity onPress={copyAddress}>
-                      <Text style={[styles.value, styles.address]} numberOfLines={1} ellipsizeMode="middle">
-                        {walletInfo.address}
-                      </Text>
-                    </TouchableOpacity>
-                    
-                    <Text style={styles.label}>Balance:</Text>
-                    <Text style={styles.value}>{walletInfo.balance || '0.0'} ETH</Text>
-                    
-                    {walletInfo.type && (
-                      <>
-                        <Text style={styles.label}>Type:</Text>
-                        <Text style={styles.value}>{walletInfo.type}</Text>
-                      </>
-                    )}
-                  </>
-                )}
-              </View>
-
-              {/* Action Buttons */}
+              {renderWalletInfo()}
+              
               <View style={styles.buttonContainer}>
-                {!walletInfo.address ? (
-                  // No wallet - show creation options
-                  <>
-                    <TouchableOpacity 
-                      style={[
-                        styles.button, 
-                        { 
-                          backgroundColor: isCheckingWallet ? theme.colors.buttonDisabled : theme.colors.buttonPrimary 
-                        }
-                      ]} 
-                      onPress={async () => {
-                        try {
-                          setStatus('Creating hardware wallet...');
-                          const { address, type } = await walletService.createWallet(false);
-                          setWalletInfo({ address, type });
-                          setStatus('Hardware wallet created successfully!');
-                          await testGetBalance();
-                        } catch (error) {
-                          console.error('Error creating hardware wallet:', error);
-                          setStatus(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-                        }
-                      }}
-                      activeOpacity={0.7}
-                      disabled={isCheckingWallet}
-                    >
-                      <Text style={{ color: 'white', textAlign: 'center', fontWeight: 'bold' }}>
-                        {isCheckingWallet ? 'Checking Wallet...' : 'Create Hardware Wallet'}
-                      </Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity 
-                      style={[
-                        styles.button, 
-                        { 
-                          backgroundColor: isCheckingWallet ? theme.colors.buttonDisabled : theme.colors.buttonSuccess 
-                        }
-                      ]} 
-                      onPress={async () => {
-                        try {
-                          setStatus('Creating software wallet...');
-                          const { address, type, mnemonic } = await walletService.createWallet(true);
-                          setWalletInfo({ address, type });
-                          setStatus('Software wallet created successfully!');
-                          await testGetBalance();
-                          
-                          Alert.alert(
-                            '🔐 Backup Your Wallet',
-                            `Your wallet has been created!\n\nMnemonic: ${mnemonic}\n\n⚠️ Write this down and keep it safe. You'll need it to recover your wallet.`,
-                            [{ text: 'OK' }]
-                          );
-                        } catch (error) {
-                          console.error('Error creating software wallet:', error);
-                          setStatus(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-                        }
-                      }}
-                      activeOpacity={0.7}
-                      disabled={isCheckingWallet}
-                    >
-                      <Text style={{ color: 'white', textAlign: 'center', fontWeight: 'bold' }}>
-                        {isCheckingWallet ? 'Checking Wallet...' : 'Create Software Wallet'}
-                      </Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity 
-                      style={[
-                        styles.button, 
-                        { 
-                          backgroundColor: isCheckingWallet || isConnecting ? theme.colors.buttonDisabled : theme.colors.buttonPrimary 
-                        }
-                      ]} 
-                      onPress={connectExternalWallet}
-                      disabled={isCheckingWallet || isConnecting}
-                    >
-                      <Text style={{ color: 'white', textAlign: 'center', fontWeight: 'bold' }}>
-                        {isCheckingWallet ? 'Checking Wallet...' : 
-                         isConnecting ? 'Connecting...' : 'Connect External Wallet'}
-                      </Text>
-                    </TouchableOpacity>
-                  </>
-                ) : (
-                  // Has wallet - show wallet actions
-                  <>
-                    <TouchableOpacity 
-                      style={[styles.button, { backgroundColor: theme.colors.buttonSecondary }]} 
-                      onPress={testGetBalance}
-                    >
-                      <Text style={{ color: 'white', textAlign: 'center', fontWeight: 'bold' }}>Refresh Balance</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity 
-                      style={[styles.button, { backgroundColor: theme.colors.buttonPrimary }]} 
-                      onPress={() => setIsSendModalVisible(true)}
-                    >
-                      <Text style={{ color: 'white', textAlign: 'center', fontWeight: 'bold' }}>Send Transaction</Text>
-                    </TouchableOpacity>
-
-                    {walletInfo.type === 'software' && (
-                      <>
-                        <TouchableOpacity 
-                          style={[styles.button, { backgroundColor: theme.colors.buttonWarning }]} 
-                          onPress={viewPrivateKey}
-                        >
-                          <Text style={{ color: 'white', textAlign: 'center', fontWeight: 'bold' }}>View Private Key</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity 
-                          style={[styles.button, { backgroundColor: theme.colors.buttonWarning }]} 
-                          onPress={async () => {
-                            try {
-                              setStatus('Retrieving mnemonic...');
-                              const { softwareWalletService } = await import('@/services/SoftwareWalletService');
-                              const mnemonic = await softwareWalletService.getMnemonic();
-                              
-                              if (mnemonic) {
-                                Alert.alert(
-                                  '🔐 Seed Phrase',
-                                  `Your wallet's seed phrase:\n\n${mnemonic}\n\nKeep this safe and never share it!`,
-                                  [
-                                    {
-                                      text: 'Copy to Clipboard',
-                                      onPress: () => {
-                                        Clipboard.setString(mnemonic);
-                                        setStatus('Seed phrase copied to clipboard!');
-                                      }
-                                    },
-                                    { text: 'Close' }
-                                  ]
-                                );
-                              } else {
-                                setStatus('No mnemonic found');
-                                Alert.alert('No Mnemonic', 'No mnemonic found for this wallet.');
-                              }
-                            } catch (error) {
-                              console.error('Error getting mnemonic:', error);
-                              setStatus(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-                            }
-                          }}
-                        >
-                          <Text style={{ color: 'white', textAlign: 'center', fontWeight: 'bold' }}>View Seed Phrase</Text>
-                        </TouchableOpacity>
-                      </>
-                    )}
-
-                    {walletInfo.type === 'external' ? (
-                      <TouchableOpacity 
-                        style={[styles.button, styles.deleteButton, { backgroundColor: theme.colors.buttonDanger }]} 
-                        onPress={disconnectExternalWallet}
-                      >
-                        <Text style={{ color: 'white', textAlign: 'center', fontWeight: 'bold' }}>Disconnect Wallet</Text>
-                      </TouchableOpacity>
-                    ) : (
-                      <TouchableOpacity 
-                        style={[styles.button, styles.deleteButton, { backgroundColor: theme.colors.buttonDanger }]} 
-                        onPress={testDeleteWallet}
-                      >
-                        <Text style={{ color: 'white', textAlign: 'center', fontWeight: 'bold' }}>Delete Wallet</Text>
-                      </TouchableOpacity>
-                    )}
-                  </>
-                )}
+                {!walletInfo.address ? renderNoWalletButtons() : renderWalletButtons()}
               </View>
             </View>
           </ScrollView>
@@ -577,132 +496,204 @@ function WalletScreen() {
       </View>
 
       {/* Send Transaction Modal */}
-      <Modal
-        animationType="slide"
-        transparent={true}
+      <TransactionModal
         visible={isSendModalVisible}
-        onRequestClose={() => setIsSendModalVisible(false)}
-      >
-        <TouchableWithoutFeedback onPress={() => setIsSendModalVisible(false)}>
-          <View style={[
-            styles.modalOverlay,
-            {
-              backgroundColor: theme.colors.modalOverlay,
-              paddingTop: insets.top,
-              paddingBottom: insets.bottom,
-            }
-          ]}>
-            <TouchableWithoutFeedback onPress={() => {}}>
-              <View style={[styles.modalContent, { backgroundColor: theme.colors.modalBackground }]}>
-                <Text style={styles.modalTitle}>Send Transaction</Text>
-                
-                <View style={styles.inputContainer}>
-                  <Text style={styles.label}>To Address:</Text>
-                  <TextInput
-                    style={[styles.input, { backgroundColor: theme.colors.inputBackground, borderColor: theme.colors.inputBorder }]}
-                    value={txInfo.to}
-                    onChangeText={(text) => setTxInfo(prev => ({ ...prev, to: text }))}
-                    placeholder="0x..."
-                    placeholderTextColor={theme.colors.placeholder}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
-                  
-                  <Text style={styles.label}>Amount (ETH):</Text>
-                  <TextInput
-                    style={[styles.input, { backgroundColor: theme.colors.inputBackground, borderColor: theme.colors.inputBorder }]}
-                    value={txInfo.amount}
-                    onChangeText={(text) => setTxInfo(prev => ({ ...prev, amount: text }))}
-                    placeholder="0.001"
-                    placeholderTextColor={theme.colors.placeholder}
-                    keyboardType="numeric"
-                  />
-                </View>
-
-                <View style={styles.modalButtons}>
-                  <TouchableOpacity 
-                    style={[styles.button, styles.cancelButton, { backgroundColor: theme.colors.buttonSecondary }]} 
-                    onPress={() => setIsSendModalVisible(false)}
-                  >
-                    <Text style={{ color: 'white', textAlign: 'center', fontWeight: 'bold' }}>Cancel</Text>
-                  </TouchableOpacity>
-                  
-                  <TouchableOpacity 
-                    style={[styles.button, { backgroundColor: theme.colors.buttonPrimary }]} 
-                    onPress={testSendTransaction}
-                    disabled={isConfirming}
-                  >
-                    <Text style={{ color: 'white', textAlign: 'center', fontWeight: 'bold' }}>
-                      {isConfirming ? 'Sending...' : 'Send'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </TouchableWithoutFeedback>
-          </View>
-        </TouchableWithoutFeedback>
-      </Modal>
+        onClose={() => setIsSendModalVisible(false)}
+        onSend={sendTransaction}
+        txInfo={txInfo}
+        setTxInfo={setTxInfo}
+        isLoading={isLoading}
+        theme={theme}
+        insets={insets}
+      />
 
       {/* Success Modal */}
-      <Modal
-        animationType="slide"
-        transparent={true}
+      <SuccessModal
         visible={isSuccessModalVisible}
-        onRequestClose={() => setIsSuccessModalVisible(false)}
-      >
-        <View style={[
-          styles.modalOverlay,
-          {
-            backgroundColor: theme.colors.modalOverlay,
-            paddingTop: insets.top,
-            paddingBottom: insets.bottom,
-          }
-        ]}>
-          <View style={[styles.modalContent, { backgroundColor: theme.colors.modalBackground }]}>
-            <Text style={styles.modalTitle}>Transaction Sent!</Text>
-            
-            <View style={styles.successContainer}>
-              <Text style={styles.label}>Transaction Hash:</Text>
-              <Text style={styles.value} numberOfLines={1} ellipsizeMode="middle">
-                {lastTxHash}
-              </Text>
-
-              <TouchableOpacity 
-                style={[styles.button, styles.linkButton, { backgroundColor: theme.colors.link }]}
-                onPress={() => {
-                  if (lastTxHash) {
-                    Linking.openURL(`https://sepolia.etherscan.io/tx/${lastTxHash}`);
-                  }
-                }}
-              >
-                <Text style={{ color: 'white', textAlign: 'center', fontWeight: 'bold' }}>
-                  View on Etherscan
-                </Text>
-              </TouchableOpacity>
-
-              {isConfirming && (
-                <Text style={[styles.confirmingText, { color: theme.colors.placeholder }]}>
-                  Waiting for confirmation...
-                </Text>
-              )}
-            </View>
-
-            <View style={styles.modalButtons}>
-              <TouchableOpacity 
-                style={[styles.button, styles.okButton, { backgroundColor: theme.colors.buttonSuccess }]} 
-                onPress={() => setIsSuccessModalVisible(false)}
-              >
-                <Text style={{ color: 'white', textAlign: 'center', fontWeight: 'bold' }}>
-                  Close
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+        onClose={() => setIsSuccessModalVisible(false)}
+        txHash={lastTxHash}
+        isConfirming={isLoading}
+        theme={theme}
+        insets={insets}
+      />
     </ErrorBoundary>
   );
 }
+
+type InfoRowProps = {
+  label: string;
+  value: string;
+};
+
+const InfoRow = ({ label, value }: InfoRowProps) => (
+  <>
+    {label && <Text style={styles.label}>{label}:</Text>}
+    <Text style={styles.value}>{value}</Text>
+  </>
+);
+
+type ActionButtonProps = {
+  title: string;
+  onPress: () => void;
+  disabled?: boolean;
+  backgroundColor: string;
+  style?: StyleProp<ViewStyle>;
+};
+
+const ActionButton = ({ title, onPress, disabled = false, backgroundColor, style }: ActionButtonProps) => (
+  <TouchableOpacity 
+    style={[
+      styles.button, 
+      { backgroundColor: disabled ? '#ccc' : backgroundColor },
+      style
+    ]} 
+    onPress={onPress}
+    activeOpacity={0.7}
+    disabled={disabled}
+  >
+    <Text style={styles.buttonText}>{title}</Text>
+  </TouchableOpacity>
+);
+
+type TransactionModalProps = {
+  visible: boolean;
+  onClose: () => void;
+  onSend: () => void;
+  txInfo: TxInfo;
+  setTxInfo: React.Dispatch<React.SetStateAction<TxInfo>>;
+  isLoading: boolean;
+  theme: any;
+  insets: any;
+};
+
+const TransactionModal = ({ visible, onClose, onSend, txInfo, setTxInfo, isLoading, theme, insets }: TransactionModalProps) => (
+  <Modal
+    animationType="slide"
+    transparent={true}
+    visible={visible}
+    onRequestClose={onClose}
+  >
+    <TouchableWithoutFeedback onPress={onClose}>
+      <View style={[
+        styles.modalOverlay,
+        {
+          backgroundColor: theme.colors.modalOverlay,
+          paddingTop: insets.top,
+          paddingBottom: insets.bottom,
+        }
+      ]}>
+        <TouchableWithoutFeedback onPress={() => {}}>
+          <View style={[styles.modalContent, { backgroundColor: theme.colors.modalBackground }]}>
+            <Text style={styles.modalTitle}>Send Transaction</Text>
+            
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>To Address:</Text>
+              <TextInput
+                style={[styles.input, { 
+                  backgroundColor: theme.colors.inputBackground, 
+                  borderColor: theme.colors.inputBorder 
+                }]}
+                value={txInfo.to}
+                onChangeText={(text) => setTxInfo(prev => ({ ...prev, to: text }))}
+                placeholder="0x..."
+                placeholderTextColor={theme.colors.placeholder}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              
+              <Text style={styles.label}>Amount (ETH):</Text>
+              <TextInput
+                style={[styles.input, { 
+                  backgroundColor: theme.colors.inputBackground, 
+                  borderColor: theme.colors.inputBorder 
+                }]}
+                value={txInfo.amount}
+                onChangeText={(text) => setTxInfo(prev => ({ ...prev, amount: text }))}
+                placeholder="0.001"
+                placeholderTextColor={theme.colors.placeholder}
+                keyboardType="numeric"
+              />
+            </View>
+
+            <View style={styles.modalButtons}>
+              <ActionButton
+                title="Cancel"
+                onPress={onClose}
+                backgroundColor={theme.colors.buttonSecondary}
+                style={styles.cancelButton}
+              />
+              <ActionButton
+                title={isLoading ? 'Sending...' : 'Send'}
+                onPress={onSend}
+                disabled={isLoading}
+                backgroundColor={theme.colors.buttonPrimary}
+              />
+            </View>
+          </View>
+        </TouchableWithoutFeedback>
+      </View>
+    </TouchableWithoutFeedback>
+  </Modal>
+);
+
+type SuccessModalProps = {
+  visible: boolean;
+  onClose: () => void;
+  txHash: string | null;
+  isConfirming: boolean;
+  theme: any;
+  insets: any;
+};
+
+const SuccessModal = ({ visible, onClose, txHash, isConfirming, theme, insets }: SuccessModalProps) => (
+  <Modal
+    animationType="slide"
+    transparent={true}
+    visible={visible}
+    onRequestClose={onClose}
+  >
+    <View style={[
+      styles.modalOverlay,
+      {
+        backgroundColor: theme.colors.modalOverlay,
+        paddingTop: insets.top,
+        paddingBottom: insets.bottom,
+      }
+    ]}>
+      <View style={[styles.modalContent, { backgroundColor: theme.colors.modalBackground }]}>
+        <Text style={styles.modalTitle}>Transaction Sent!</Text>
+        
+        <View style={styles.successContainer}>
+          <InfoRow label="Transaction Hash" value={txHash || ''} />
+
+          {txHash && (
+            <ActionButton
+              title="View on Etherscan"
+              onPress={() => Linking.openURL(`https://sepolia.etherscan.io/tx/${txHash}`)}
+              backgroundColor={theme.colors.link}
+              style={styles.linkButton}
+            />
+          )}
+
+          {isConfirming && (
+            <Text style={[styles.confirmingText, { color: theme.colors.placeholder }]}>
+              Waiting for confirmation...
+            </Text>
+          )}
+        </View>
+
+        <View style={styles.modalButtons}>
+          <ActionButton
+            title="Close"
+            onPress={onClose}
+            backgroundColor={theme.colors.buttonSuccess}
+            style={styles.okButton}
+          />
+        </View>
+      </View>
+    </View>
+  </Modal>
+);
 
 const styles = StyleSheet.create({
   container: {
@@ -720,16 +711,6 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     padding: 20,
-  },
-  header: {
-    marginBottom: 20,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    textAlign: 'center',
-    paddingTop: 20,
-    marginBottom: 8,
   },
   card: {
     padding: 20,
@@ -759,6 +740,11 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  buttonText: {
+    color: 'white',
+    textAlign: 'center',
+    fontWeight: 'bold',
   },
   deleteButton: {
     marginTop: 20,
@@ -829,6 +815,5 @@ const styles = StyleSheet.create({
     fontSize: 16,
     textAlign: 'center',
   },
-});
+});export default WalletScreen;
 
-export default WalletScreen; 

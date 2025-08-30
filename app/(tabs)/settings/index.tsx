@@ -35,6 +35,7 @@ export default function SettingsScreen() {
   };
 
   return (
+    // TODO: Move safeareaview inside the scrollview (for ios 26)
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView
         style={styles.scrollView}
@@ -246,6 +247,7 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#fff',
   },
   scrollView: {
     flex: 1,

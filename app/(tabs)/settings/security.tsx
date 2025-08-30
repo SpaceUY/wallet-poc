@@ -1,4 +1,3 @@
-import { AppSecurityConfig, appSecurityService } from '@/services/AppSecurityService';
 import React, { useEffect, useState } from 'react';
 import {
   Alert,
@@ -14,6 +13,9 @@ import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { createTheme } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/useColorScheme';
+import { appSecurityService } from '@/services/AppSecurityService';
+import { PINModalType, PINState } from '@/types/common';
+import { AppSecurityConfig, SecurityStatus } from '@/types/services';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -22,14 +24,11 @@ export default function SecuritySettingsScreen() {
   const colorScheme = useColorScheme();
   const theme = createTheme(colorScheme ?? 'light');
 
-  const [securityStatus, setSecurityStatus] = useState<any>(null);
+  const [securityStatus, setSecurityStatus] = useState<SecurityStatus | null>(null);
   const [config, setConfig] = useState<AppSecurityConfig | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [showPINSetup, setShowPINSetup] = useState(false);
-  const [showPINChange, setShowPINChange] = useState(false);
-  const [currentPIN, setCurrentPIN] = useState('');
-  const [newPIN, setNewPIN] = useState('');
-  const [confirmPIN, setConfirmPIN] = useState('');
+  const [activePINModal, setActivePINModal] = useState<PINModalType>(null);
+  const [pinState, setPinState] = useState<PINState>({ value: '', confirm: '' });
 
   useEffect(() => {
     loadSecurityData();
@@ -40,7 +39,6 @@ export default function SecuritySettingsScreen() {
       const status = await appSecurityService.getSecurityStatus();
       setSecurityStatus(status);
       
-      // Get current config
       const currentConfig = await appSecurityService.getSecurityStatus();
       setConfig({
         requireAuthentication: currentConfig.useBiometric || currentConfig.usePIN,
@@ -83,51 +81,65 @@ export default function SecuritySettingsScreen() {
     }
   };
 
+  const resetPINState = () => {
+    setPinState({ value: '', confirm: '' });
+    setActivePINModal(null);
+  };
+
   const handleTogglePIN = async (enabled: boolean) => {
     if (enabled && !securityStatus?.pinConfigured) {
-      setShowPINSetup(true);
+      setActivePINModal('setup');
     } else if (!enabled) {
-      Alert.alert(
-        'Remove PIN',
-        'Are you sure you want to remove PIN protection?',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Remove',
-            style: 'destructive',
-            onPress: async () => {
-              try {
-                await appSecurityService.removePIN();
-                await loadSecurityData();
-              } catch (error) {
-                console.error('Error removing PIN:', error);
-                Alert.alert('Error', 'Failed to remove PIN.');
-              }
-            },
-          },
-        ]
-      );
+      setActivePINModal('remove');
+    }
+  };
+
+  const handleRemovePIN = async () => {
+    if (!pinState.value) {
+      Alert.alert('Invalid PIN', 'Please enter your current PIN.');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const success = await appSecurityService.unlockWithPIN(pinState.value);
+      if (success) {
+        await appSecurityService.removePIN();
+        await loadSecurityData();
+        resetPINState();
+        Alert.alert('Success', 'PIN has been removed successfully.');
+      }
+    } catch (error) {
+      setPinState({ value: '' });
+      Alert.alert('Error', error instanceof Error ? error.message : 'Failed to remove PIN.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const handleSetupPIN = async () => {
-    if (!newPIN || newPIN.length < 4) {
-      Alert.alert('Invalid PIN', 'PIN must be at least 4 digits.');
+    const { value, confirm } = pinState;
+    
+    if (!value || value.length !== 4) {
+      Alert.alert('Invalid PIN', 'PIN must be exactly 4 digits.');
       return;
     }
 
-    if (newPIN !== confirmPIN) {
+    if (!/^\d{4}$/.test(value)) {
+      Alert.alert('Invalid PIN', 'PIN must contain only digits.');
+      return;
+    }
+
+    if (value !== confirm) {
       Alert.alert('PIN Mismatch', 'PINs do not match.');
       return;
     }
 
     setIsLoading(true);
     try {
-      await appSecurityService.setupPIN(newPIN);
+      await appSecurityService.setupPIN(value);
       await loadSecurityData();
-      setShowPINSetup(false);
-      setNewPIN('');
-      setConfirmPIN('');
+      resetPINState();
       Alert.alert('Success', 'PIN has been set up successfully.');
     } catch (error) {
       console.error('Error setting up PIN:', error);
@@ -138,13 +150,15 @@ export default function SecuritySettingsScreen() {
   };
 
   const handleChangePIN = async () => {
-    if (!currentPIN || !newPIN || newPIN.length < 4) {
+    const { value: currentPIN, confirm: newPIN } = pinState;
+    
+    if (!currentPIN || !newPIN || newPIN.length !== 4) {
       Alert.alert('Invalid Input', 'Please enter valid PINs.');
       return;
     }
 
-    if (newPIN !== confirmPIN) {
-      Alert.alert('PIN Mismatch', 'New PINs do not match.');
+    if (!/^\d{4}$/.test(newPIN)) {
+      Alert.alert('Invalid PIN', 'New PIN must contain only digits.');
       return;
     }
 
@@ -152,10 +166,7 @@ export default function SecuritySettingsScreen() {
     try {
       await appSecurityService.changePIN(currentPIN, newPIN);
       await loadSecurityData();
-      setShowPINChange(false);
-      setCurrentPIN('');
-      setNewPIN('');
-      setConfirmPIN('');
+      resetPINState();
       Alert.alert('Success', 'PIN has been changed successfully.');
     } catch (error) {
       console.error('Error changing PIN:', error);
@@ -285,7 +296,7 @@ export default function SecuritySettingsScreen() {
             <>
               <TouchableOpacity
                 style={[styles.actionButton, { backgroundColor: theme.colors.buttonSecondary }]}
-                onPress={() => setShowPINChange(true)}
+                onPress={() => setActivePINModal('change')}
               >
                 <Ionicons name="create-outline" size={20} color="white" />
                 <ThemedText style={styles.actionButtonText}>Change PIN</ThemedText>
@@ -375,128 +386,121 @@ export default function SecuritySettingsScreen() {
         </View>
       </ScrollView>
 
-      {/* PIN Setup Modal */}
-      {showPINSetup && (
+      {activePINModal && (
         <View style={[styles.modalOverlay, { backgroundColor: theme.colors.modalOverlay }]}>
           <View style={[styles.modalContent, { backgroundColor: theme.colors.modalBackground }]}>
-            <ThemedText style={styles.modalTitle}>Set Up PIN</ThemedText>
+            <ThemedText style={styles.modalTitle}>
+              {activePINModal === 'setup' ? 'Set Up PIN' :
+               activePINModal === 'change' ? 'Change PIN' :
+               'Remove PIN'}
+            </ThemedText>
             
             <View style={styles.inputContainer}>
-              <ThemedText style={styles.inputLabel}>Enter PIN (4-8 digits):</ThemedText>
-              <TextInput
-                style={[styles.input, { backgroundColor: theme.colors.inputBackground, borderColor: theme.colors.inputBorder }]}
-                value={newPIN}
-                onChangeText={setNewPIN}
-                placeholder="Enter PIN"
-                placeholderTextColor={theme.colors.placeholder}
-                keyboardType="numeric"
-                secureTextEntry
-                maxLength={8}
-              />
-              
-              <ThemedText style={styles.inputLabel}>Confirm PIN:</ThemedText>
-              <TextInput
-                style={[styles.input, { backgroundColor: theme.colors.inputBackground, borderColor: theme.colors.inputBorder }]}
-                value={confirmPIN}
-                onChangeText={setConfirmPIN}
-                placeholder="Confirm PIN"
-                placeholderTextColor={theme.colors.placeholder}
-                keyboardType="numeric"
-                secureTextEntry
-                maxLength={8}
-              />
-            </View>
-            
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, { backgroundColor: theme.colors.buttonSecondary }]}
-                onPress={() => {
-                  setShowPINSetup(false);
-                  setNewPIN('');
-                  setConfirmPIN('');
-                }}
-              >
-                <ThemedText style={styles.modalButtonText}>Cancel</ThemedText>
-              </TouchableOpacity>
-              
-              <TouchableOpacity
-                style={[styles.modalButton, { backgroundColor: theme.colors.buttonPrimary }]}
-                onPress={handleSetupPIN}
-                disabled={isLoading}
-              >
-                <ThemedText style={styles.modalButtonText}>
-                  {isLoading ? 'Setting Up...' : 'Set PIN'}
-                </ThemedText>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      )}
+              {activePINModal === 'setup' && (
+                <>
+                  <ThemedText style={styles.inputLabel}>Enter PIN (4 digits):</ThemedText>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: theme.colors.inputBackground, borderColor: theme.colors.inputBorder }]}
+                    value={pinState.value}
+                    onChangeText={(text) => setPinState(prev => ({ ...prev, value: text }))}
+                    placeholder="Enter PIN"
+                    placeholderTextColor={theme.colors.placeholder}
+                    keyboardType="numeric"
+                    secureTextEntry
+                    maxLength={4}
+                  />
+                  
+                  <ThemedText style={styles.inputLabel}>Confirm PIN:</ThemedText>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: theme.colors.inputBackground, borderColor: theme.colors.inputBorder }]}
+                    value={pinState.confirm}
+                    onChangeText={(text) => setPinState(prev => ({ ...prev, confirm: text }))}
+                    placeholder="Confirm PIN"
+                    placeholderTextColor={theme.colors.placeholder}
+                    keyboardType="numeric"
+                    secureTextEntry
+                    maxLength={4}
+                  />
+                </>
+              )}
 
-      {/* PIN Change Modal */}
-      {showPINChange && (
-        <View style={[styles.modalOverlay, { backgroundColor: theme.colors.modalOverlay }]}>
-          <View style={[styles.modalContent, { backgroundColor: theme.colors.modalBackground }]}>
-            <ThemedText style={styles.modalTitle}>Change PIN</ThemedText>
-            
-            <View style={styles.inputContainer}>
-              <ThemedText style={styles.inputLabel}>Current PIN:</ThemedText>
-              <TextInput
-                style={[styles.input, { backgroundColor: theme.colors.inputBackground, borderColor: theme.colors.inputBorder }]}
-                value={currentPIN}
-                onChangeText={setCurrentPIN}
-                placeholder="Current PIN"
-                placeholderTextColor={theme.colors.placeholder}
-                keyboardType="numeric"
-                secureTextEntry
-                maxLength={8}
-              />
-              
-              <ThemedText style={styles.inputLabel}>New PIN (4-8 digits):</ThemedText>
-              <TextInput
-                style={[styles.input, { backgroundColor: theme.colors.inputBackground, borderColor: theme.colors.inputBorder }]}
-                value={newPIN}
-                onChangeText={setNewPIN}
-                placeholder="New PIN"
-                placeholderTextColor={theme.colors.placeholder}
-                keyboardType="numeric"
-                secureTextEntry
-                maxLength={8}
-              />
-              
-              <ThemedText style={styles.inputLabel}>Confirm New PIN:</ThemedText>
-              <TextInput
-                style={[styles.input, { backgroundColor: theme.colors.inputBackground, borderColor: theme.colors.inputBorder }]}
-                value={confirmPIN}
-                onChangeText={setConfirmPIN}
-                placeholder="Confirm New PIN"
-                placeholderTextColor={theme.colors.placeholder}
-                keyboardType="numeric"
-                secureTextEntry
-                maxLength={8}
-              />
+              {activePINModal === 'change' && (
+                <>
+                  <ThemedText style={styles.inputLabel}>Current PIN:</ThemedText>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: theme.colors.inputBackground, borderColor: theme.colors.inputBorder }]}
+                    value={pinState.value}
+                    onChangeText={(text) => setPinState(prev => ({ ...prev, value: text }))}
+                    placeholder="Current PIN"
+                    placeholderTextColor={theme.colors.placeholder}
+                    keyboardType="numeric"
+                    secureTextEntry
+                    maxLength={4}
+                  />
+                  
+                  <ThemedText style={styles.inputLabel}>New PIN (4 digits):</ThemedText>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: theme.colors.inputBackground, borderColor: theme.colors.inputBorder }]}
+                    value={pinState.confirm}
+                    onChangeText={(text) => setPinState(prev => ({ ...prev, confirm: text }))}
+                    placeholder="New PIN"
+                    placeholderTextColor={theme.colors.placeholder}
+                    keyboardType="numeric"
+                    secureTextEntry
+                    maxLength={4}
+                  />
+                </>
+              )}
+
+              {activePINModal === 'remove' && (
+                <>
+                  <ThemedText style={styles.inputLabel}>Enter your current PIN to confirm:</ThemedText>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: theme.colors.inputBackground, borderColor: theme.colors.inputBorder }]}
+                    value={pinState.value}
+                    onChangeText={(text) => setPinState(prev => ({ ...prev, value: text }))}
+                    placeholder="Enter PIN"
+                    placeholderTextColor={theme.colors.placeholder}
+                    keyboardType="numeric"
+                    secureTextEntry
+                    maxLength={4}
+                  />
+                </>
+              )}
             </View>
             
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.modalButton, { backgroundColor: theme.colors.buttonSecondary }]}
-                onPress={() => {
-                  setShowPINChange(false);
-                  setCurrentPIN('');
-                  setNewPIN('');
-                  setConfirmPIN('');
-                }}
+                onPress={resetPINState}
               >
                 <ThemedText style={styles.modalButtonText}>Cancel</ThemedText>
               </TouchableOpacity>
               
               <TouchableOpacity
-                style={[styles.modalButton, { backgroundColor: theme.colors.buttonPrimary }]}
-                onPress={handleChangePIN}
+                style={[
+                  styles.modalButton, 
+                  { 
+                    backgroundColor: activePINModal === 'remove' 
+                      ? theme.colors.buttonDanger 
+                      : theme.colors.buttonPrimary 
+                  }
+                ]}
+                onPress={
+                  activePINModal === 'setup' ? handleSetupPIN :
+                  activePINModal === 'change' ? handleChangePIN :
+                  handleRemovePIN
+                }
                 disabled={isLoading}
               >
                 <ThemedText style={styles.modalButtonText}>
-                  {isLoading ? 'Changing...' : 'Change PIN'}
+                  {isLoading 
+                    ? (activePINModal === 'setup' ? 'Setting Up...' :
+                       activePINModal === 'change' ? 'Changing...' :
+                       'Removing...') 
+                    : (activePINModal === 'setup' ? 'Set PIN' :
+                       activePINModal === 'change' ? 'Change PIN' :
+                       'Remove PIN')}
                 </ThemedText>
               </TouchableOpacity>
             </View>
